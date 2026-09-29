@@ -1,0 +1,15 @@
+--- a/sokol_app.h
++++ b/sokol_app.h
+@@ -5190,7 +5190,9 @@
+     _sapp.macos.mtl.layer = [CAMetalLayer layer];
+     _sapp.macos.mtl.layer.device = _sapp.macos.mtl.device;
+     _sapp.macos.mtl.layer.magnificationFilter = kCAFilterNearest;
+     _sapp.macos.mtl.layer.opaque = true;
+     _sapp.macos.mtl.layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+-    _sapp.macos.mtl.layer.framebufferOnly = true;
++    // Neverwhere: PggViewer --shot reads back the drawable texture via a blit
++    // copy, which requires the layer's drawables to be non-framebufferOnly.
++    _sapp.macos.mtl.layer.framebufferOnly = false;
+     //NOTE: default is 3: _sapp.macos.mtl.layer.maximumDrawableCount = 2;
+     // FIXME: _sapp.macos.mtl.layer.colorspace = ...;
+     _sapp.macos.view = [[_sapp_macos_view alloc] init];

@@ -1,0 +1,124 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "default",
+      "displayName": "Visual Studio 17 2022 x64",
+      "binaryDir": "${sourceDir}/_intermediate_64",
+      "generator": "Visual Studio 17 2022",
+      "architecture": { "value": "x64", "strategy": "set" },
+      "environment": {
+        "VCPKG_BINARY_SOURCES": "clear;http,https://cache.blackbox9.cc:9443/{name}/{version}/{triplet}/{sha},readwrite,$env{NEVERWHERE_VCPKG_CACHE_AUTH}"
+      },
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/toolchain/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "VCPKG_OVERLAY_PORTS": "${sourceDir}/vcpkg_overlays/ports",
+        "VCPKG_INSTALL_OPTIONS": "--x-buildtrees-root=d:/_build"
+      }
+    },
+    {
+      "name": "vs2022",
+      "displayName": "Visual Studio 17 2022 x64",
+      "inherits": "default"
+    },
+    {
+      "name": "ide-index",
+      "displayName": "Ninja (IDE indexing only, emits compile_commands.json)",
+      "binaryDir": "${sourceDir}/_intermediate_ide",
+      "generator": "Ninja",
+      "environment": {
+        "VCPKG_BINARY_SOURCES": "clear;http,https://cache.blackbox9.cc:9443/{name}/{version}/{triplet}/{sha},readwrite,$env{NEVERWHERE_VCPKG_CACHE_AUTH}"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/toolchain/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "VCPKG_OVERLAY_PORTS": "${sourceDir}/vcpkg_overlays/ports",
+        "VCPKG_INSTALL_OPTIONS": "--x-buildtrees-root=d:/_build",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "macos",
+      "displayName": "macOS (Xcode, arm64-osx)",
+      "binaryDir": "${sourceDir}/_intermediate_64",
+      "generator": "Xcode",
+      "environment": {
+        "VCPKG_BINARY_SOURCES": "clear;http,https://cache.blackbox9.cc:9443/{name}/{version}/{triplet}/{sha},readwrite,$env{NEVERWHERE_VCPKG_CACHE_AUTH}"
+      },
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/toolchain/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "arm64-osx",
+        "VCPKG_OVERLAY_PORTS": "${sourceDir}/vcpkg_overlays/ports"
+      }
+    },
+    {
+      "name": "macos-index",
+      "displayName": "macOS Ninja (IDE indexing only, emits compile_commands.json)",
+      "binaryDir": "${sourceDir}/_intermediate_ide",
+      "generator": "Ninja",
+      "environment": {
+        "VCPKG_BINARY_SOURCES": "clear;http,https://cache.blackbox9.cc:9443/{name}/{version}/{triplet}/{sha},readwrite,$env{NEVERWHERE_VCPKG_CACHE_AUTH}"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/toolchain/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "arm64-osx",
+        "VCPKG_OVERLAY_PORTS": "${sourceDir}/vcpkg_overlays/ports",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "macos-clion",
+      "displayName": "CLion (Ninja, arm64-osx, Debug)",
+      "inherits": "macos-index",
+      "binaryDir": "${sourceDir}/_int_clion"
+    },
+    {
+      "name": "macos-clion-release",
+      "displayName": "CLion (Ninja, arm64-osx, Release)",
+      "inherits": "macos-clion",
+      "binaryDir": "${sourceDir}/_int_clion_release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "linux",
+      "displayName": "Linux (Ninja, x64-linux)",
+      "binaryDir": "${sourceDir}/_int_linux",
+      "generator": "Ninja",
+      "environment": {
+        "VCPKG_BINARY_SOURCES": "clear;http,https://cache.blackbox9.cc:9443/{name}/{version}/{triplet}/{sha},readwrite,$env{NEVERWHERE_VCPKG_CACHE_AUTH}"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/toolchain/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "x64-linux",
+        "VCPKG_OVERLAY_PORTS": "${sourceDir}/vcpkg_overlays/ports",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "linux-release",
+      "displayName": "Linux (Ninja, x64-linux, Release)",
+      "inherits": "linux",
+      "binaryDir": "${sourceDir}/_int_linux_release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "debug", "configurePreset": "vs2022", "configuration": "Debug" },
+    { "name": "release", "configurePreset": "vs2022", "configuration": "Release" },
+    { "name": "macos-debug", "configurePreset": "macos", "configuration": "Debug" },
+    { "name": "macos-release", "configurePreset": "macos", "configuration": "Release" },
+    { "name": "macos-clion-debug", "configurePreset": "macos-clion" },
+    { "name": "macos-clion-release", "configurePreset": "macos-clion-release" },
+    { "name": "linux-debug", "configurePreset": "linux" },
+    { "name": "linux-release", "configurePreset": "linux-release" }
+  ]
+}

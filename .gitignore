@@ -1,0 +1,25 @@
+_intermidiate_64
+build
+_int_linux
+_int_linux_release
+cmake-build-debug
+.idea
+CMakeLists.txt.user
+_intermediate_64
+_intermediate_ide
+_int_mac
+_int_clion
+_int_clion_release
+Testing/Temporary/
+__pycache__
+logs/
+
+# Generated for clangd indexing only.
+# Symlink or copy of _intermediate_ide/compile_commands.json, rebuilt on demand.
+compile_commands.json
+.cache/
+
+*.log
+
+# Scratch space for local experiments
+tmp/

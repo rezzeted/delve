@@ -1,0 +1,14 @@
+{
+  "dependencies": [
+    "antlr4",
+    "boost-graph",
+    "fmt",
+    "glm",
+    "imgui",
+    "joltphysics",
+    "nlohmann-json",
+    "sokol",
+    "spdlog",
+    "stb"
+  ]
+}

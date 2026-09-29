@@ -1,0 +1,9 @@
+{
+  "name": "sokol",
+  "version-date": "2026-05-21",
+  "port-version": 1,
+  "description": "Minimal cross-platform standalone C headers",
+  "homepage": "https://github.com/floooh/sokol",
+  "license": "Zlib"
+}
+

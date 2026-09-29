@@ -1,0 +1,11 @@
+[submodule "thirdparty/pgg"]
+	path = thirdparty/pgg
+	url = git@github.com:rezzeted/pgg.git
+	branch = jolt
+[submodule "thirdparty/level-synth"]
+	path = thirdparty/level-synth
+	url = git@github.com:rezzeted/level-synth.git
+	branch = main
+[submodule "toolchain/vcpkg"]
+	path = toolchain/vcpkg
+	url = https://github.com/microsoft/vcpkg.git
