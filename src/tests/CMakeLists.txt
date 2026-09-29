@@ -1,0 +1,10 @@
+find_package(GTest REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
+
+add_executable(delve_d0_test delve_d0_test.cpp)
+target_link_libraries(delve_d0_test PRIVATE GTest::gtest_main delve_d0 pgg nlohmann_json::nlohmann_json)
+target_compile_definitions(delve_d0_test PRIVATE DELVE_D0_DIR="${CMAKE_SOURCE_DIR}/docs/d0")
+target_compile_features(delve_d0_test PRIVATE cxx_std_20)
+set_property(TARGET delve_d0_test PROPERTY FOLDER tests)
+
+add_test(NAME delve_d0_test COMMAND delve_d0_test)

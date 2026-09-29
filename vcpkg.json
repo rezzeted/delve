@@ -9,6 +9,8 @@
     "nlohmann-json",
     "sokol",
     "spdlog",
-    "stb"
+    "stb",
+    "yaml-cpp",
+    "gtest"
   ]
 }

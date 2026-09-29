@@ -67,3 +67,4 @@ add_subdirectory(thirdparty/level-synth/src/libs/edgar)
 
 add_subdirectory(src/libs)
 add_subdirectory(src/apps)
+add_subdirectory(src/tests)
