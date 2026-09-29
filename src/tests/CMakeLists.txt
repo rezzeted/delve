@@ -8,3 +8,13 @@ target_compile_features(delve_d0_test PRIVATE cxx_std_20)
 set_property(TARGET delve_d0_test PROPERTY FOLDER tests)
 
 add_test(NAME delve_d0_test COMMAND delve_d0_test)
+
+add_executable(delve_ir_test delve_ir_test.cpp)
+target_link_libraries(delve_ir_test PRIVATE GTest::gtest_main delve nlohmann_json::nlohmann_json)
+target_compile_definitions(delve_ir_test PRIVATE
+    DELVE_TEST_DATA="${CMAKE_SOURCE_DIR}/src/tests/data"
+    DELVE_D0_DIR="${CMAKE_SOURCE_DIR}/docs/d0")
+target_compile_features(delve_ir_test PRIVATE cxx_std_20)
+set_property(TARGET delve_ir_test PROPERTY FOLDER tests)
+
+add_test(NAME delve_ir_test COMMAND delve_ir_test)

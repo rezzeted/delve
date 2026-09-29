@@ -1,0 +1,33 @@
+{
+  "format": "delve-project/0",
+  "seed": 7,
+  "fill": {
+    "cell": 2.0,
+    "wall_t": 0.6,
+    "min_passage": 1.2,
+    "min_opening": 0.8,
+    "room_h": 3.0,
+    "door_h": 2.2,
+    "frame": 0.15,
+    "lamp_step": 4.0,
+    "row_module": 0.25,
+    "roles": {
+      "*": {"h": 3.0, "style": "stone", "floor": "stone", "ceil": "plain"},
+      "corridor": {"h": 2.6, "style": "brick", "floor": "brick", "ceil": "plain"}
+    },
+    "transitions": {"pattern": "butt", "width": 1.0, "place": "corner"},
+    "side_rules": [
+      {"match": {"adjacent_role": "corridor"}, "style": "brick"},
+      {"match": {"side": "outer"}, "style": "stone"}
+    ]
+  },
+  "slots": {
+    "room_fill": "rooms/fill_v1.pgg",
+    "wall_body": "walls/body_v1.pgg",
+    "facing": "walls/facing_v1.pgg",
+    "node": "walls/node_v1.pgg",
+    "door": "doors/opening_v1.pgg",
+    "decor:lamp": "decor/lamp_v1.pgg"
+  },
+  "asset_roots": ["assets"]
+}
