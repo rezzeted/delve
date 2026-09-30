@@ -225,7 +225,7 @@ bool parse_frozen(const std::string& text, const std::string& path, std::vector<
 
 // Contour edge of a rect room: axis line (vert, coord), span [t0, t1], t0 < t1.
 struct Edge {
-    int room = -1;
+    std::string room;
     int index = -1;  // contour edge index (leaves vertex `index`)
     bool vert = false;
     int coord = 0;
@@ -236,7 +236,7 @@ struct Atom {
     bool vert = false;
     int coord = 0;
     int t0 = 0, t1 = 0;
-    int room_neg = -1, room_pos = -1;  // room on each side (-1 = void)
+    std::string room_neg, room_pos;  // room on each side ("" = void)
 };
 
 struct LineKey {
@@ -258,26 +258,27 @@ int zone_seed(int zone_id) {
     return static_cast<int>(fnv1a_32("transition/" + std::to_string(zone_id)) & 0x7fffffff);
 }
 
-bool build_ir_v1(const std::string& frozen_json, const std::string& frozen_path,
-                 const Project& project, const std::string& project_path, IrV1& out,
+bool build_ir_v2(const std::string& frozen_json, const std::string& frozen_path,
+                 const Project& project, const std::string& project_path, IrV2& out,
                  std::string& err) {
     const double cell = project.fill.cell;
     const double thick = project.fill.wall_t;
+    auto sid = [](int id) { return std::to_string(id); };  // frozen id -> v2 string id
 
     // --- 1. frozen rooms ---
     std::vector<FrozenRoom> frooms;
     if (!parse_frozen(frozen_json, frozen_path, frooms, err)) return false;
-    std::map<int, size_t> room_idx;
-    for (size_t i = 0; i < frooms.size(); ++i) room_idx[frooms[i].id] = i;
+    std::map<std::string, size_t> room_idx;  // v2 id -> frooms/ir.rooms index (same order)
+    for (size_t i = 0; i < frooms.size(); ++i) room_idx[sid(frooms[i].id)] = i;
 
-    IrV1 ir;
+    IrV2 ir;
     ir.frozen_path = frozen_path;
     ir.project_path = project_path;
 
     // --- 2. rooms + roles ---
     for (const auto& fr : frooms) {
         IrRoom r;
-        r.id = fr.id;
+        r.id = sid(fr.id);
         r.corridor = fr.corridor;
         r.role = room_role(fr.corridor);
         r.grid = fr.grid;
@@ -295,7 +296,7 @@ bool build_ir_v1(const std::string& frozen_json, const std::string& frozen_path,
         for (size_t i = 0; i < fr.grid.size(); ++i) {
             const GridPt p = fr.grid[i], q = fr.grid[(i + 1) % fr.grid.size()];
             Edge e;
-            e.room = fr.id;
+            e.room = sid(fr.id);
             e.index = static_cast<int>(i);
             if (p.first == q.first) {
                 e.vert = true;
@@ -321,7 +322,7 @@ bool build_ir_v1(const std::string& frozen_json, const std::string& frozen_path,
         std::vector<int> ts(splits.begin(), splits.end());
         for (size_t i = 0; i + 1 < ts.size(); ++i) {
             const int t0 = ts[i], t1 = ts[i + 1];
-            std::set<int> neg, pos;
+            std::set<std::string> neg, pos;
             for (const auto& e : edges) {
                 if (!(e.t0 <= t0 && t1 <= e.t1)) continue;
                 const FrozenRoom& fr = frooms[room_idx[e.room]];
@@ -331,7 +332,7 @@ bool build_ir_v1(const std::string& frozen_json, const std::string& frozen_path,
                     else if (fr.x0 == key.coord)
                         pos.insert(e.room);
                     else {
-                        err = frozen_path + ": internal: room " + std::to_string(e.room) +
+                        err = frozen_path + ": internal: room " + e.room +
                               " not adjacent to its edge";
                         return false;
                     }
@@ -341,7 +342,7 @@ bool build_ir_v1(const std::string& frozen_json, const std::string& frozen_path,
                     else if (fr.y0 == key.coord)
                         pos.insert(e.room);
                     else {
-                        err = frozen_path + ": internal: room " + std::to_string(e.room) +
+                        err = frozen_path + ": internal: room " + e.room +
                               " not adjacent to its edge";
                         return false;
                     }
@@ -358,9 +359,9 @@ bool build_ir_v1(const std::string& frozen_json, const std::string& frozen_path,
             a.coord = key.coord;
             a.t0 = t0;
             a.t1 = t1;
-            a.room_neg = neg.empty() ? -1 : *neg.begin();
-            a.room_pos = pos.empty() ? -1 : *pos.begin();
-            if (a.room_neg < 0 && a.room_pos < 0) continue;  // uncovered gap (cannot happen)
+            a.room_neg = neg.empty() ? "" : *neg.begin();
+            a.room_pos = pos.empty() ? "" : *pos.begin();
+            if (a.room_neg.empty() && a.room_pos.empty()) continue;  // uncovered gap (cannot happen)
             atoms.push_back(a);
         }
     }
@@ -398,28 +399,29 @@ bool build_ir_v1(const std::string& frozen_json, const std::string& frozen_path,
             w.room_left = a.room_pos;
             w.room_right = a.room_neg;
         }
-        w.outer = (w.room_left < 0) != (w.room_right < 0);
-        if (w.room_left < 0 && w.room_right < 0) {
+        w.outer = w.room_left.empty() != w.room_right.empty();
+        if (w.room_left.empty() && w.room_right.empty()) {
             err = frozen_path + ": internal: wall " + w.id + " has no rooms";
             return false;
         }
-        w.owner = w.outer ? std::max(w.room_left, w.room_right)
+        w.owner = w.outer ? (w.room_left.empty() ? w.room_right : w.room_left)
                           : std::min(w.room_left, w.room_right);
         w.g0 = g0;
         w.g1 = g1;
         w.thick = thick;
         const double h_owner = ir.rooms[room_idx[w.owner]].h;
-        w.h_left = w.room_left < 0 ? h_owner : ir.rooms[room_idx[w.room_left]].h;
-        w.h_right = w.room_right < 0 ? h_owner : ir.rooms[room_idx[w.room_right]].h;
+        w.h_left = w.room_left.empty() ? h_owner : ir.rooms[room_idx[w.room_left]].h;
+        w.h_right = w.room_right.empty() ? h_owner : ir.rooms[room_idx[w.room_right]].h;
         wall_idx[w.id] = ir.walls.size();
         ir.walls.push_back(std::move(w));
     }
 
     // --- 4. doors -> walls + 5.4 structural checks ---
-    std::set<std::tuple<int, int, GridPt, GridPt>> door_pairs;
+    std::set<std::tuple<std::string, std::string, GridPt, GridPt>> door_pairs;
     for (const auto& fr : frooms)
         for (const auto& d : fr.doors)
-            door_pairs.insert({std::min(fr.id, d.to), std::max(fr.id, d.to), d.d0, d.d1});
+            door_pairs.insert(
+                {std::min(sid(fr.id), sid(d.to)), std::max(sid(fr.id), sid(d.to)), d.d0, d.d1});
     for (const auto& [ra, rb, dd0, dd1] : door_pairs) {
         const bool vert = dd0.first == dd1.first;
         const int coord = vert ? dd0.first : dd0.second;
@@ -428,15 +430,13 @@ bool build_ir_v1(const std::string& frozen_json, const std::string& frozen_path,
         // Crossing check: a split strictly inside the door span.
         const auto lit = lines.find({vert, coord});
         if (lit == lines.end()) {
-            err = frozen_path + ": internal: door of rooms " + std::to_string(ra) + "-" +
-                  std::to_string(rb) + " is on no line";
+            err = frozen_path + ": internal: door of rooms " + ra + "-" + rb + " is on no line";
             return false;
         }
         for (const auto& e : lit->second) {
             if ((td0 < e.t0 && e.t0 < td1) || (td0 < e.t1 && e.t1 < td1)) {
-                err = frozen_path + ": door " + fmt_pt(dd0) + "-" + fmt_pt(dd1) + " of rooms " +
-                      std::to_string(ra) + "-" + std::to_string(rb) +
-                      " crosses a T-junction (vertices split walls, doors cannot span them)";
+                err = frozen_path + ": door " + fmt_pt(dd0) + "-" + fmt_pt(dd1) + " of rooms " + ra +
+                      "-" + rb + " crosses a T-junction (vertices split walls, doors cannot span them)";
                 return false;
             }
         }
@@ -447,23 +447,22 @@ bool build_ir_v1(const std::string& frozen_json, const std::string& frozen_path,
             if (a.t0 <= td0 && td1 <= a.t1) owner_atom = &a;
         }
         if (!owner_atom) {
-            err = frozen_path + ": door " + fmt_pt(dd0) + "-" + fmt_pt(dd1) + " of rooms " +
-                  std::to_string(ra) + "-" + std::to_string(rb) + " lies on no wall";
+            err = frozen_path + ": door " + fmt_pt(dd0) + "-" + fmt_pt(dd1) + " of rooms " + ra +
+                  "-" + rb + " lies on no wall";
             return false;
         }
         const auto [g0, g1] = atom_ends(*owner_atom);
         const std::string wid = wall_id_of(g0, g1);
         IrWall& wall = ir.walls[wall_idx[wid]];
-        const int wa = std::min(wall.room_left, wall.room_right);
-        const int wb = std::max(wall.room_left, wall.room_right);
+        const std::string wa = std::min(wall.room_left, wall.room_right);
+        const std::string wb = std::max(wall.room_left, wall.room_right);
         if (wall.outer || wa != ra || wb != rb) {
-            err = frozen_path + ": door " + fmt_pt(dd0) + "-" + fmt_pt(dd1) + " of rooms " +
-                  std::to_string(ra) + "-" + std::to_string(rb) + " is not on their shared wall (" +
-                  wid + ")";
+            err = frozen_path + ": door " + fmt_pt(dd0) + "-" + fmt_pt(dd1) + " of rooms " + ra +
+                  "-" + rb + " is not on their shared wall (" + wid + ")";
             return false;
         }
         IrDoor door;
-        door.id = "door:" + std::to_string(ra) + "-" + std::to_string(rb);
+        door.id = "door:" + ra + "-" + rb;
         door.room_a = ra;
         door.room_b = rb;
         door.wall = wid;
@@ -524,10 +523,10 @@ bool build_ir_v1(const std::string& frozen_json, const std::string& frozen_path,
                   std::to_string(incident.size()) + " walls";
             return false;
         }
-        std::set<int> adj;
+        std::set<std::string> adj;
         for (const auto* a : incident) {
-            if (a->room_neg >= 0) adj.insert(a->room_neg);
-            if (a->room_pos >= 0) adj.insert(a->room_pos);
+            if (!a->room_neg.empty()) adj.insert(a->room_neg);
+            if (!a->room_pos.empty()) adj.insert(a->room_pos);
         }
         IrNode node;
         node.id = "node:" + std::to_string(v.first) + "," + std::to_string(v.second);
@@ -535,7 +534,7 @@ bool build_ir_v1(const std::string& frozen_json, const std::string& frozen_path,
         node.at = v;
         node.thick = thick;
         node.h_pillar = 0;
-        for (int r : adj) node.h_pillar = std::max(node.h_pillar, ir.rooms[room_idx[r]].h);
+        for (const auto& r : adj) node.h_pillar = std::max(node.h_pillar, ir.rooms[room_idx[r]].h);
         for (const GridPt n : kDirs) {
             bool closed = false;
             for (const auto* a : incident) {
@@ -548,8 +547,8 @@ bool build_ir_v1(const std::string& frozen_json, const std::string& frozen_path,
             }
             if (closed) continue;
             // Open face: the room strictly beyond it (void if none).
-            std::vector<int> beyond;
-            for (int r : adj) {
+            std::vector<std::string> beyond;
+            for (const auto& r : adj) {
                 const FrozenRoom& fr = frooms[room_idx[r]];
                 if (n.first == 1 && fr.x0 == v.first && fr.y0 < v.second && v.second < fr.y1)
                     beyond.push_back(r);
@@ -567,8 +566,8 @@ bool build_ir_v1(const std::string& frozen_json, const std::string& frozen_path,
             IrNodeFace f;
             f.center = {n.first * thick / 2.0, n.second * thick / 2.0};
             f.n = {static_cast<double>(n.first), static_cast<double>(n.second)};
-            f.room = beyond.empty() ? -1 : beyond[0];
-            if (f.room < 0) {
+            f.room = beyond.empty() ? "" : beyond[0];
+            if (f.room.empty()) {
                 f.h = ir.rooms[room_idx[node.owner]].h;
                 f.style = resolve_role(project, ir.rooms[room_idx[node.owner]].role).style;
             } else {
@@ -609,7 +608,7 @@ bool build_ir_v1(const std::string& frozen_json, const std::string& frozen_path,
 
     // --- 6+7. developments + transitions ---
     struct Joint {
-        int room = -1;
+        std::string room;
         double s = 0;  // joint position on the development
         double period = 0;  // development length (perimeter, meters)
         size_t facing_in = 0, facing_out = 0;  // indices into ir.facings
@@ -622,7 +621,7 @@ bool build_ir_v1(const std::string& frozen_json, const std::string& frozen_path,
     std::vector<Joint> joints;
 
     for (const auto& fr : frooms) {
-        const IrRoom& room = ir.rooms[room_idx[fr.id]];
+        const IrRoom& room = ir.rooms[room_idx[sid(fr.id)]];
         const double cx = (fr.x0 + fr.x1) * 0.5 * cell, cz = (fr.y0 + fr.y1) * 0.5 * cell;
         // s-coordinate of each contour vertex (walk order).
         std::vector<double> s_vert(fr.grid.size() + 1, 0);
@@ -655,15 +654,15 @@ bool build_ir_v1(const std::string& frozen_json, const std::string& frozen_path,
                 const Atom& a = *edge_atoms[k];
                 const bool room_on_neg =
                     (a.vert && ((fr.x1 == a.coord))) || (!a.vert && ((fr.y1 == a.coord)));
-                const int other = room_on_neg ? a.room_pos : a.room_neg;
-                const bool outer = other < 0;
+                const std::string other = room_on_neg ? a.room_pos : a.room_neg;
+                const bool outer = other.empty();
                 const auto [g0, g1] = atom_ends(a);
                 const std::string wid = wall_id_of(g0, g1);
                 IrFacing f;
-                f.id = "fac:" + std::to_string(fr.id) + ":" + std::to_string(i);
+                f.id = "fac:" + sid(fr.id) + ":" + std::to_string(i);
                 if (edge_atoms.size() > 1) f.id += "." + std::to_string(k);
                 f.wall = wid;
-                f.room = fr.id;
+                f.room = sid(fr.id);
                 const std::string adj_role =
                     outer ? "" : ir.rooms[room_idx[other]].role;
                 f.style = resolve_side_style(project, room.role, outer, adj_role);
@@ -730,7 +729,7 @@ bool build_ir_v1(const std::string& frozen_json, const std::string& frozen_path,
             const IrFacing& f_in = ir.facings[fi_in];
             const IrFacing& f_out = ir.facings[fi_out];
             Joint jt;
-            jt.room = fr.id;
+            jt.room = sid(fr.id);
             jt.period = s_vert[fr.grid.size()];
             jt.facing_in = fi_in;
             jt.facing_out = fi_out;
@@ -775,7 +774,7 @@ bool build_ir_v1(const std::string& frozen_json, const std::string& frozen_path,
         // plain T-faces (no transition) keep the room style from step 5, fixed here
         // to the incoming facing style for consistency.
         for (const Joint& jt : joints) {
-            if (jt.room != fr.id || !jt.has_tface) continue;
+            if (jt.room != sid(fr.id) || !jt.has_tface) continue;
             const std::string nid =
                 "node:" + std::to_string(jt.t_vertex.first) + "," + std::to_string(jt.t_vertex.second);
             const auto fit = face_idx.find({nid, jt.t_normal});
@@ -785,14 +784,14 @@ bool build_ir_v1(const std::string& frozen_json, const std::string& frozen_path,
             }
             IrNode& node = ir.nodes[node_idx[jt.t_vertex]];
             IrNodeFace& face = node.faces[fit->second];
-            if (face.room != fr.id) {
+            if (face.room != sid(fr.id)) {
                 err = frozen_path + ": internal: T-face at " + fmt_pt(jt.t_vertex) +
-                      " looks into room " + std::to_string(face.room);
+                      " looks into room " + face.room;
                 return false;
             }
             if (!strictly_inside_edge(fr, jt.t_vertex)) {
                 err = frozen_path + ": internal: vertex " + fmt_pt(jt.t_vertex) + " not inside room " +
-                      std::to_string(fr.id) + " edge";
+                      sid(fr.id) + " edge";
                 return false;
             }
             face.style = ir.facings[jt.facing_in].style;  // A; transitions refine below
@@ -903,10 +902,9 @@ bool build_ir_v1(const std::string& frozen_json, const std::string& frozen_path,
             t.s1 = kept.back().r1;
         }
         if (t.shortened) {
-            ir.warnings.push_back("transition " + std::to_string(t.id) + " (room " +
-                                  std::to_string(t.room) + ", " + style_a + "|" + style_b +
-                                  "): zone shortened to [" + fmt_num(t.s0) + ", " + fmt_num(t.s1) +
-                                  "] (wall too short or a door is in the way)");
+            ir.warnings.push_back("transition " + std::to_string(t.id) + " (room " + t.room + ", " +
+                                  style_a + "|" + style_b + "): zone shortened to [" + fmt_num(t.s0) +
+                                  ", " + fmt_num(t.s1) + "] (wall too short or a door is in the way)");
         }
         // Pieces: zone runs on each involved unit (t from the ORIGINAL s0).
         auto emit = [&](size_t fi, double l_origin, bool is_face, size_t node_i, size_t face_i,
@@ -965,7 +963,7 @@ bool build_ir_v1(const std::string& frozen_json, const std::string& frozen_path,
             const auto* b = by_s[i + 1];
             if (a->room == b->room && b->s0 < a->s1 - kEps)
                 ir.warnings.push_back("transitions " + std::to_string(a->id) + " and " +
-                                      std::to_string(b->id) + " (room " + std::to_string(a->room) +
+                                      std::to_string(b->id) + " (room " + a->room +
                                       ") overlap; narrow fill.transitions.width");
         }
     }
@@ -985,7 +983,7 @@ bool build_ir_v1(const std::string& frozen_json, const std::string& frozen_path,
         if (!fr.corridor) continue;
         const double w = (fr.x1 - fr.x0) * cell - thick;
         const double h = (fr.y1 - fr.y0) * cell - thick;
-        ir.corridor_clear[fr.id] = std::min(w, h);
+        ir.corridor_clear[sid(fr.id)] = std::min(w, h);
     }
 
     // --- 9. stable order (N6) ---
@@ -1003,8 +1001,11 @@ bool build_ir_v1(const std::string& frozen_json, const std::string& frozen_path,
     return true;
 }
 
-bool write_ir_v1_json(const IrV1& ir, std::string& text_out, std::string& err) {
+bool write_ir_v2_json(const IrV2& ir, std::string& text_out, std::string& err) {
     (void)err;
+    auto j_room = [](const std::string& id) {
+        return id.empty() ? nlohmann::ordered_json(nullptr) : nlohmann::ordered_json(id);
+    };
     nlohmann::ordered_json doc;
     doc["format"] = kIrFormat;
     doc["source"] = {{"frozen", ir.frozen_path}, {"project", ir.project_path}};
@@ -1029,7 +1030,7 @@ bool write_ir_v1_json(const IrV1& ir, std::string& text_out, std::string& err) {
         jwalls.push_back({{"id", w.id},
                           {"outer", w.outer},
                           {"owner", w.owner},
-                          {"rooms", {w.room_left, w.room_right}},
+                          {"rooms", {j_room(w.room_left), j_room(w.room_right)}},
                           {"axis", {{w.g0.first, w.g0.second}, {w.g1.first, w.g1.second}}},
                           {"thick", w.thick},
                           {"h", {w.h_left, w.h_right}},
@@ -1069,7 +1070,7 @@ bool write_ir_v1_json(const IrV1& ir, std::string& text_out, std::string& err) {
             for (const auto& z : f.zones) jzones.push_back(jpiece(z));
             jfaces.push_back({{"center", {f.center.first, f.center.second}},
                               {"n", {f.n.first, f.n.second}},
-                              {"room", f.room},
+                              {"room", j_room(f.room)},
                               {"h", f.h},
                               {"style", f.style},
                               {"zones", std::move(jzones)}});
@@ -1111,7 +1112,7 @@ bool write_ir_v1_json(const IrV1& ir, std::string& text_out, std::string& err) {
     for (const auto& w : ir.warnings) jwarn.push_back(w);
     doc["warnings"] = std::move(jwarn);
     nlohmann::ordered_json jclear = nlohmann::ordered_json::object();
-    for (const auto& [id, v] : ir.corridor_clear) jclear[std::to_string(id)] = v;
+    for (const auto& [id, v] : ir.corridor_clear) jclear[id] = v;
     doc["derived"] = {{"corridor_clear", std::move(jclear)}};
     text_out = doc.dump(1) + "\n";
     return true;
@@ -1137,8 +1138,7 @@ bool j_seg(const nlohmann::json& j, WorldPt& a, WorldPt& b) {
     return j_world_pt(j[0], a) && j_world_pt(j[1], b);
 }
 
-bool j_piece(const nlohmann::json& j, ZonePiece& p) {
-    if (!j.is_object()) return false;
+bool j_piece(const nlohmann::json& j, ZonePiece& p) {    if (!j.is_object()) return false;
     try {
         p.zone = j.at("zone").get<int>();
         p.pattern = j.at("pattern").get<int>();
@@ -1159,9 +1159,20 @@ bool j_piece(const nlohmann::json& j, ZonePiece& p) {
     return true;
 }
 
+// Room reference: string id, null = void.
+bool j_room_ref(const nlohmann::json& j, std::string& out) {
+    if (j.is_null()) {
+        out.clear();
+        return true;
+    }
+    if (!j.is_string()) return false;
+    out = j.get<std::string>();
+    return true;
+}
+
 }  // namespace
 
-bool read_ir_v1_json(const std::string& text, IrV1& out, std::string& err) {
+bool read_ir_v2_json(const std::string& text, IrV2& out, std::string& err) {
     nlohmann::json doc;
     try {
         doc = nlohmann::json::parse(text);
@@ -1169,18 +1180,21 @@ bool read_ir_v1_json(const std::string& text, IrV1& out, std::string& err) {
         err = std::string("invalid JSON: ") + e.what();
         return false;
     }
-    if (doc.value("format", std::string{}) != kIrFormat) {
-        err = "unsupported IR format \"" + doc.value("format", std::string{}) + "\" (expected " +
-              kIrFormat + "); regenerate the IR from the frozen IR with the D1 builder";
+    const std::string format = doc.value("format", std::string{});
+    if (format != kIrFormat) {
+        err = "unsupported IR format \"" + format + "\" (expected " + kIrFormat +
+              "); regenerate the IR from the frozen IR / project with the D2 builder";
+        if (format == "delve-ir/1")
+            err += " (v1 files carry int room ids and cannot be read as v2)";
         return false;
     }
     try {
-        IrV1 ir;
+        IrV2 ir;
         ir.frozen_path = doc.at("source").at("frozen").get<std::string>();
         ir.project_path = doc.at("source").at("project").get<std::string>();
         for (const auto& jr : doc.at("rooms")) {
             IrRoom r;
-            r.id = jr.at("id").get<int>();
+            r.id = jr.at("id").get<std::string>();
             r.corridor = jr.at("corridor").get<bool>();
             r.role = jr.at("role").get<std::string>();
             for (const auto& jp : jr.at("grid")) {
@@ -1198,9 +1212,10 @@ bool read_ir_v1_json(const std::string& text, IrV1& out, std::string& err) {
             IrWall w;
             w.id = jw.at("id").get<std::string>();
             w.outer = jw.at("outer").get<bool>();
-            w.owner = jw.at("owner").get<int>();
-            w.room_left = jw.at("rooms").at(0).get<int>();
-            w.room_right = jw.at("rooms").at(1).get<int>();
+            w.owner = jw.at("owner").get<std::string>();
+            if (!j_room_ref(jw.at("rooms").at(0), w.room_left) ||
+                !j_room_ref(jw.at("rooms").at(1), w.room_right))
+                throw std::runtime_error("bad wall rooms");
             GridPt a, b;
             if (!j_grid_pt(jw.at("axis").at(0), a) || !j_grid_pt(jw.at("axis").at(1), b))
                 throw std::runtime_error("bad wall axis");
@@ -1216,7 +1231,7 @@ bool read_ir_v1_json(const std::string& text, IrV1& out, std::string& err) {
             IrFacing f;
             f.id = jf.at("id").get<std::string>();
             f.wall = jf.at("wall").get<std::string>();
-            f.room = jf.at("room").get<int>();
+            f.room = jf.at("room").get<std::string>();
             f.style = jf.at("style").get<std::string>();
             if (!j_seg(jf.at("seg"), f.from, f.to)) throw std::runtime_error("bad facing seg");
             if (!j_world_pt(jf.at("n"), f.n)) throw std::runtime_error("bad facing n");
@@ -1239,7 +1254,7 @@ bool read_ir_v1_json(const std::string& text, IrV1& out, std::string& err) {
         for (const auto& jn : doc.at("nodes")) {
             IrNode n;
             n.id = jn.at("id").get<std::string>();
-            n.owner = jn.at("owner").get<int>();
+            n.owner = jn.at("owner").get<std::string>();
             if (!j_grid_pt(jn.at("at"), n.at)) throw std::runtime_error("bad node at");
             n.thick = jn.at("thick").get<double>();
             n.h_pillar = jn.at("h_pillar").get<double>();
@@ -1247,7 +1262,7 @@ bool read_ir_v1_json(const std::string& text, IrV1& out, std::string& err) {
                 IrNodeFace f;
                 if (!j_world_pt(jf.at("center"), f.center)) throw std::runtime_error("bad face center");
                 if (!j_world_pt(jf.at("n"), f.n)) throw std::runtime_error("bad face n");
-                f.room = jf.at("room").get<int>();
+                if (!j_room_ref(jf.at("room"), f.room)) throw std::runtime_error("bad face room");
                 f.h = jf.at("h").get<double>();
                 f.style = jf.at("style").get<std::string>();
                 for (const auto& jz : jf.at("zones")) {
@@ -1262,8 +1277,8 @@ bool read_ir_v1_json(const std::string& text, IrV1& out, std::string& err) {
         for (const auto& jd : doc.at("doors")) {
             IrDoor d;
             d.id = jd.at("id").get<std::string>();
-            d.room_a = jd.at("rooms").at(0).get<int>();
-            d.room_b = jd.at("rooms").at(1).get<int>();
+            d.room_a = jd.at("rooms").at(0).get<std::string>();
+            d.room_b = jd.at("rooms").at(1).get<std::string>();
             d.wall = jd.at("wall").get<std::string>();
             GridPt a, b;
             if (!j_grid_pt(jd.at("grid").at(0), a) || !j_grid_pt(jd.at("grid").at(1), b))
@@ -1281,7 +1296,7 @@ bool read_ir_v1_json(const std::string& text, IrV1& out, std::string& err) {
         for (const auto& jt : doc.at("transitions")) {
             IrTransition t;
             t.id = jt.at("id").get<int>();
-            t.room = jt.at("room").get<int>();
+            t.room = jt.at("room").get<std::string>();
             t.style_a = jt.at("styles").at(0).get<std::string>();
             t.style_b = jt.at("styles").at(1).get<std::string>();
             t.pattern = jt.at("pattern").get<int>();
@@ -1295,10 +1310,10 @@ bool read_ir_v1_json(const std::string& text, IrV1& out, std::string& err) {
         }
         for (const auto& jw : doc.at("warnings")) ir.warnings.push_back(jw.get<std::string>());
         for (const auto& [k, v] : doc.at("derived").at("corridor_clear").items())
-            ir.corridor_clear[std::stoi(k)] = v.get<double>();
+            ir.corridor_clear[k] = v.get<double>();
         out = std::move(ir);
     } catch (const std::exception& e) {
-        err = std::string("bad IR v1 JSON: ") + e.what();
+        err = std::string("bad IR v2 JSON: ") + e.what();
         return false;
     }
     return true;

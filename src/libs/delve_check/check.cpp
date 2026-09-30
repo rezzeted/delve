@@ -170,12 +170,12 @@ double zoneBoundary(const ZonePiece& p, double yc) {
 
 }  // namespace
 
-bool check_passage(const IrV1& ir, const Project& project, std::vector<CheckDiag>& diags) {
+bool check_passage(const IrV2& ir, const Project& project, std::vector<CheckDiag>& diags) {
     const size_t mark = diags.size();
     for (const auto& [id, clear] : ir.corridor_clear)
         if (clear < project.fill.min_passage - 1e-9)
             push(diags, mark, "passage",
-                 "corridor " + std::to_string(id) + ": clear width " + std::to_string(clear) +
+                 "corridor " + id + ": clear width " + std::to_string(clear) +
                      " < min_passage " + std::to_string(project.fill.min_passage));
     for (const auto& d : ir.doors)
         if (d.clear < project.fill.min_opening - 1e-9)
@@ -185,7 +185,7 @@ bool check_passage(const IrV1& ir, const Project& project, std::vector<CheckDiag
     return diags.size() == mark;
 }
 
-bool check_opening_voids(const IrV1& ir, const FillResult& fill, std::vector<CheckDiag>& diags) {
+bool check_opening_voids(const IrV2& ir, const FillResult& fill, std::vector<CheckDiag>& diags) {
     const size_t mark = diags.size();
     if (ir.doors.empty() || !fill.mesh || fill.mesh->pointCount() == 0) return true;
     const auto* styles = styleCol(fill.mesh);
@@ -237,7 +237,7 @@ bool check_opening_voids(const IrV1& ir, const FillResult& fill, std::vector<Che
     return diags.size() == mark;
 }
 
-bool check_transitions(const IrV1& ir, const Project& project, const FillResult& fill,
+bool check_transitions(const IrV2& ir, const Project& project, const FillResult& fill,
                        std::vector<CheckDiag>& diags) {
     const size_t mark = diags.size();
     if (!fill.mesh || fill.mesh->pointCount() == 0) return true;
@@ -370,7 +370,7 @@ bool check_transitions(const IrV1& ir, const Project& project, const FillResult&
     return diags.size() == mark;
 }
 
-bool check_anchors(const IrV1& ir, const Project& project, const FillResult& fill,
+bool check_anchors(const IrV2& ir, const Project& project, const FillResult& fill,
                    std::vector<CheckDiag>& diags) {
     const size_t mark = diags.size();
     if (!fill.anchors || fill.anchors->pointCount() == 0) return true;
@@ -425,7 +425,7 @@ bool check_anchors(const IrV1& ir, const Project& project, const FillResult& fil
     return diags.size() == mark;
 }
 
-bool check_spans(const IrV1& ir, const Project& project, std::vector<CheckDiag>& diags) {
+bool check_spans(const IrV2& ir, const Project& project, std::vector<CheckDiag>& diags) {
     const size_t mark = diags.size();
     // Bodies: v1 walls are axis-aligned grid atoms. Colinear atoms must be
     // disjoint (T-split); crossings must sit on a node.
@@ -513,15 +513,14 @@ bool check_spans(const IrV1& ir, const Project& project, std::vector<CheckDiag>&
                 }
     // Facings per room: development intervals must not overlap (adjacent
     // atoms touch across pillar/T gaps, never over them).
-    std::map<int, std::vector<const IrFacing*>> perRoom;
+    std::map<std::string, std::vector<const IrFacing*>> perRoom;
     for (const auto& f : ir.facings) perRoom[f.room].push_back(&f);
     for (const auto& [room, vec] : perRoom)
         for (size_t i = 0; i < vec.size(); ++i)
             for (size_t j = i + 1; j < vec.size(); ++j)
                 if (std::min(vec[i]->s1, vec[j]->s1) - std::max(vec[i]->s0, vec[j]->s0) > 1e-9)
                     push(diags, mark, "spans",
-                         vec[i]->id + " overlaps " + vec[j]->id + " in room " +
-                             std::to_string(room));
+                         vec[i]->id + " overlaps " + vec[j]->id + " in room " + room);
     // Pillars: distinct grid vertices are disjoint by construction; assert it.
     if (nodeAt.size() != ir.nodes.size())
         push(diags, mark, "spans", "two nodes share one grid vertex");
@@ -579,7 +578,7 @@ bool check_elements(const FillResult& fill, std::vector<CheckDiag>& diags) {
     return diags.size() == mark;
 }
 
-bool check_level(const IrV1& ir, const Project& project, const FillResult& fill,
+bool check_level(const IrV2& ir, const Project& project, const FillResult& fill,
                  std::vector<CheckDiag>& diags) {
     bool ok = true;
     ok = check_passage(ir, project, diags) && ok;

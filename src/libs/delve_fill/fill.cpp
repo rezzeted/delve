@@ -93,7 +93,7 @@ int needStyle(const std::string& name, const std::string& unit, std::string& err
     return code;
 }
 
-const IrRoom* roomById(const IrV1& ir, int id) {
+const IrRoom* roomById(const IrV2& ir, const std::string& id) {
     for (const auto& r : ir.rooms)
         if (r.id == id) return &r;
     return nullptr;
@@ -113,7 +113,7 @@ void zoneAttrs(PointsBuilder& b, const ZonePiece& p) {
 
 bool expandRoom(const IrRoom& r, double cell, int fill_seed, const std::string& asset, Unit& u,
                 std::string& err) {
-    u.id = "room:" + std::to_string(r.id);
+    u.id = "room:" + r.id;
     u.slot = "room_fill";
     u.asset = asset;
     double minx = 1e300, minz = 1e300;
@@ -162,7 +162,7 @@ bool expandRoom(const IrRoom& r, double cell, int fill_seed, const std::string& 
     return true;
 }
 
-bool expandBody(const IrWall& w, const IrV1& ir, double cell, int fill_seed,
+bool expandBody(const IrWall& w, const IrV2& ir, double cell, int fill_seed,
                 const std::string& asset, const std::map<std::string, const IrDoor*>& doors,
                 Unit& u, std::string& err) {
     u.id = w.id;
@@ -199,7 +199,7 @@ bool expandBody(const IrWall& w, const IrV1& ir, double cell, int fill_seed,
     if (!cutGeo) return false;
     const IrRoom* owner = roomById(ir, w.owner);
     if (!owner) {
-        err = "delve/run [" + u.id + "]: owner room " + std::to_string(w.owner) + " missing";
+        err = "delve/run [" + u.id + "]: owner room " + w.owner + " missing";
         return false;
     }
     const int style = needStyle(owner->style, u.id, err);
@@ -278,7 +278,7 @@ bool expandFacing(const IrFacing& f, double row_module, int fill_seed,
     return true;
 }
 
-bool expandNode(const IrNode& n, const IrV1& ir, double cell, double row_module, int fill_seed,
+bool expandNode(const IrNode& n, const IrV2& ir, double cell, double row_module, int fill_seed,
                 const std::string& asset, Unit& u, std::string& err) {
     u.id = n.id;
     u.slot = "node";
@@ -309,7 +309,7 @@ bool expandNode(const IrNode& n, const IrV1& ir, double cell, double row_module,
     if (!zoneGeo) return false;
     const IrRoom* owner = roomById(ir, n.owner);
     if (!owner) {
-        err = "delve/run [" + u.id + "]: owner room " + std::to_string(n.owner) + " missing";
+        err = "delve/run [" + u.id + "]: owner room " + n.owner + " missing";
         return false;
     }
     const int style = needStyle(owner->style, u.id, err);
@@ -370,7 +370,7 @@ bool expandLamps(const IrRoom& r, double cell, double step, int fill_seed, int& 
     bool ok = false;
     const int style = style_code(r.ceil_style, ok);
     if (!ok) {
-        err = "delve/run [room:" + std::to_string(r.id) + "]: unknown style '" + r.ceil_style +
+        err = "delve/run [room:" + r.id + "]: unknown style '" + r.ceil_style +
               "'";
         return false;
     }
@@ -721,7 +721,7 @@ pgg::GeoPtr labelAnchors(const pgg::GeoPtr& g, const std::string& unit, std::str
 
 }  // namespace
 
-bool fill_level(const IrV1& ir, const Project& project, const FillOpts& opts, FillResult& out,
+bool fill_level(const IrV2& ir, const Project& project, const FillOpts& opts, FillResult& out,
                 std::string& err) {
     out = FillResult{};
     if (opts.delve_assets.empty()) {

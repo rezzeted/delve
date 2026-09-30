@@ -1,4 +1,4 @@
-// Delve D1.1: project side-rules + IR v1 (F4) + delve-ir/1 JSON round-trip.
+// Delve D1.1: project side-rules + IR v2 (F4) + delve-ir/2 JSON round-trip.
 
 #include <gtest/gtest.h>
 
@@ -36,13 +36,13 @@ delve::Project loadFixtureProject() {
     return p;
 }
 
-const delve::IrFacing* findFacing(const delve::IrV1& ir, const std::string& id) {
+const delve::IrFacing* findFacing(const delve::IrV2& ir, const std::string& id) {
     for (const auto& f : ir.facings)
         if (f.id == id) return &f;
     return nullptr;
 }
 
-const delve::IrNode* findNode(const delve::IrV1& ir, const std::string& id) {
+const delve::IrNode* findNode(const delve::IrV2& ir, const std::string& id) {
     for (const auto& n : ir.nodes)
         if (n.id == id) return &n;
     return nullptr;
@@ -108,9 +108,9 @@ TEST(ProjectRules, BadRuleRejected) {
 TEST(IrRealLayout, WallsNodesDoors) {
     const delve::Project p = loadFixtureProject();
     const std::string frozen_path = std::string(DELVE_D0_DIR) + "/frozen_ir.json";
-    delve::IrV1 ir;
+    delve::IrV2 ir;
     std::string err;
-    ASSERT_TRUE(delve::build_ir_v1(readFile(frozen_path), frozen_path, p, "test", ir, err)) << err;
+    ASSERT_TRUE(delve::build_ir_v2(readFile(frozen_path), frozen_path, p, "test", ir, err)) << err;
 
     EXPECT_EQ(ir.rooms.size(), 17u);
     // Atom counts verified against an independent sweep of the frozen IR.
@@ -127,7 +127,7 @@ TEST(IrRealLayout, WallsNodesDoors) {
         for (const auto& f : ir.facings)
             if (f.wall == w.id) facings++;
         EXPECT_EQ(facings, w.outer ? 1u : 2u) << w.id;
-        EXPECT_GE(w.owner, 0) << w.id;
+        EXPECT_FALSE(w.owner.empty()) << w.id;
         if (!w.outer) {
             EXPECT_EQ(w.owner, std::min(w.room_left, w.room_right)) << w.id;
             EXPECT_NE(w.room_left, w.room_right) << w.id;
@@ -173,9 +173,9 @@ TEST(IrRealLayout, ForcedTransitions) {
     r.style = "brick";  // outer brick vs shared stone -> transitions at every joint
     p.fill.side_rules.push_back(r);
     const std::string frozen_path = std::string(DELVE_D0_DIR) + "/frozen_ir.json";
-    delve::IrV1 ir;
+    delve::IrV2 ir;
     std::string err;
-    ASSERT_TRUE(delve::build_ir_v1(readFile(frozen_path), frozen_path, p, "test", ir, err)) << err;
+    ASSERT_TRUE(delve::build_ir_v2(readFile(frozen_path), frozen_path, p, "test", ir, err)) << err;
     EXPECT_GT(ir.transitions.size(), 0u);
 
     // Every transition is referenced by >= 1 piece; every piece references a live zone.
@@ -208,9 +208,9 @@ TEST(IrRealLayout, ForcedTransitions) {
 TEST(IrCorner, ButtCentered) {
     const delve::Project p = loadFixtureProject();  // butt + corner
     const std::string frozen_path = std::string(DELVE_TEST_DATA) + "/corner_frozen.json";
-    delve::IrV1 ir;
+    delve::IrV2 ir;
     std::string err;
-    ASSERT_TRUE(delve::build_ir_v1(readFile(frozen_path), frozen_path, p, "test", ir, err)) << err;
+    ASSERT_TRUE(delve::build_ir_v2(readFile(frozen_path), frozen_path, p, "test", ir, err)) << err;
 
     ASSERT_EQ(ir.rooms.size(), 2u);
     EXPECT_EQ(ir.walls.size(), 9u);
@@ -222,7 +222,7 @@ TEST(IrCorner, ButtCentered) {
     // Transitions 2,3 (room 1 corners) lose their pillar gaps -> shortened.
     ASSERT_EQ(ir.warnings.size(), 2u);
     ASSERT_EQ(ir.corridor_clear.size(), 1u);
-    EXPECT_DOUBLE_EQ(ir.corridor_clear.at(1), 3.4);
+    EXPECT_DOUBLE_EQ(ir.corridor_clear.at("1"), 3.4);
 
     // Room 0 bottom edge (walk -x, s in [20, 32]): stone | brick | stone.
     const delve::IrFacing* f0 = findFacing(ir, "fac:0:2.0");
@@ -244,7 +244,7 @@ TEST(IrCorner, ButtCentered) {
     // Four transitions: two T-joints in room 0, two corners in room 1
     // (corridor outers are stone by rule, the shared wall is brick by role).
     ASSERT_EQ(ir.transitions.size(), 4u);
-    EXPECT_EQ(ir.transitions[0].room, 0);
+    EXPECT_EQ(ir.transitions[0].room, "0");
     EXPECT_EQ(ir.transitions[0].style_a, "stone");
     EXPECT_EQ(ir.transitions[0].style_b, "brick");
     EXPECT_DOUBLE_EQ(ir.transitions[0].s0, 21.5);
@@ -256,14 +256,14 @@ TEST(IrCorner, ButtCentered) {
     EXPECT_DOUBLE_EQ(ir.transitions[1].s1, 30.5);
     EXPECT_FALSE(ir.transitions[1].shortened);
     // Room 1 corner @ s=8 (plain corner: the pillar gap shortens the zone).
-    EXPECT_EQ(ir.transitions[2].room, 1);
+    EXPECT_EQ(ir.transitions[2].room, "1");
     EXPECT_EQ(ir.transitions[2].style_a, "brick");
     EXPECT_EQ(ir.transitions[2].style_b, "stone");
     EXPECT_DOUBLE_EQ(ir.transitions[2].s0, 7.5);
     EXPECT_DOUBLE_EQ(ir.transitions[2].s1, 8.5);
     EXPECT_TRUE(ir.transitions[2].shortened);
     // Room 1 wrap corner @ s=24 (zone crosses the development origin).
-    EXPECT_EQ(ir.transitions[3].room, 1);
+    EXPECT_EQ(ir.transitions[3].room, "1");
     EXPECT_EQ(ir.transitions[3].style_a, "stone");
     EXPECT_EQ(ir.transitions[3].style_b, "brick");
     EXPECT_DOUBLE_EQ(ir.transitions[3].s0, 23.5);
@@ -282,7 +282,7 @@ TEST(IrCorner, ButtCentered) {
     ASSERT_NE(n5, nullptr);
     const delve::IrNodeFace* tf = nullptr;
     for (const auto& f : n5->faces)
-        if (f.room == 0) tf = &f;
+        if (f.room == "0") tf = &f;
     ASSERT_NE(tf, nullptr);
     EXPECT_EQ(tf->style, "stone");  // A side
     ASSERT_EQ(tf->zones.size(), 1u);
@@ -336,9 +336,9 @@ TEST(IrCorner, ChaseOnWall) {
     p.fill.transitions.pattern = "chase";
     p.fill.transitions.place = "wall";
     const std::string frozen_path = std::string(DELVE_TEST_DATA) + "/corner_frozen.json";
-    delve::IrV1 ir;
+    delve::IrV2 ir;
     std::string err;
-    ASSERT_TRUE(delve::build_ir_v1(readFile(frozen_path), frozen_path, p, "test", ir, err)) << err;
+    ASSERT_TRUE(delve::build_ir_v2(readFile(frozen_path), frozen_path, p, "test", ir, err)) << err;
 
     ASSERT_EQ(ir.transitions.size(), 4u);
     EXPECT_EQ(ir.transitions[0].pattern, 1);
@@ -372,9 +372,9 @@ TEST(IrCorner, RetuneWithoutEdgar) {
     p.fill.cell = 2.5;
     p.fill.wall_t = 0.8;
     const std::string frozen_path = std::string(DELVE_TEST_DATA) + "/corner_frozen.json";
-    delve::IrV1 ir;
+    delve::IrV2 ir;
     std::string err;
-    ASSERT_TRUE(delve::build_ir_v1(readFile(frozen_path), frozen_path, p, "test", ir, err)) << err;
+    ASSERT_TRUE(delve::build_ir_v2(readFile(frozen_path), frozen_path, p, "test", ir, err)) << err;
     ASSERT_EQ(ir.doors.size(), 1u);
     EXPECT_DOUBLE_EQ(ir.doors[0].clear, 2.2);  // 2.5 - 2*0.15
     const delve::IrFacing* f0 = findFacing(ir, "fac:0:2.0");
@@ -395,9 +395,9 @@ TEST(IrErrors, DoorOffset) {
         text.replace(pos, from.size(), "[[1, 0], [2, 0]]");
         pos += 1;
     }
-    delve::IrV1 ir;
+    delve::IrV2 ir;
     std::string err;
-    EXPECT_FALSE(delve::build_ir_v1(text, "corner", p, "test", ir, err));
+    EXPECT_FALSE(delve::build_ir_v2(text, "corner", p, "test", ir, err));
     EXPECT_NE(err.find("door:0-1"), std::string::npos) << err;
     EXPECT_NE(err.find("5.4"), std::string::npos) << err;
 }
@@ -408,9 +408,9 @@ TEST(IrErrors, UnpairedDoor) {
     const std::string from = "\"to\": 0, \"grid\": [[2, 0], [3, 0]]";
     ASSERT_NE(text.find(from), std::string::npos);
     text.replace(text.find(from), from.size(), "\"to\": 0, \"grid\": [[4, 0], [5, 0]]");
-    delve::IrV1 ir;
+    delve::IrV2 ir;
     std::string err;
-    EXPECT_FALSE(delve::build_ir_v1(text, "corner", p, "test", ir, err));
+    EXPECT_FALSE(delve::build_ir_v2(text, "corner", p, "test", ir, err));
     EXPECT_NE(err.find("no matching entry"), std::string::npos) << err;
 }
 
@@ -423,9 +423,9 @@ TEST(IrErrors, MultiCellDoor) {
         pos += 1;
     }
     // Fix one room back so pairing still fails on length first (length is checked first).
-    delve::IrV1 ir;
+    delve::IrV2 ir;
     std::string err;
-    EXPECT_FALSE(delve::build_ir_v1(text, "corner", p, "test", ir, err));
+    EXPECT_FALSE(delve::build_ir_v2(text, "corner", p, "test", ir, err));
     EXPECT_NE(err.find("multi-cell"), std::string::npos) << err;
 }
 
@@ -435,23 +435,23 @@ TEST(IrErrors, FiguredRoom) {
     const std::string from = "[[0, 0], [6, 0], [6, 4], [0, 4]]";
     ASSERT_NE(text.find(from), std::string::npos);
     text.replace(text.find(from), from.size(), "[[0, 0], [6, 0], [6, 4], [3, 4], [0, 4]]");
-    delve::IrV1 ir;
+    delve::IrV2 ir;
     std::string err;
-    EXPECT_FALSE(delve::build_ir_v1(text, "corner", p, "test", ir, err));
+    EXPECT_FALSE(delve::build_ir_v2(text, "corner", p, "test", ir, err));
     EXPECT_NE(err.find("figured rooms"), std::string::npos) << err;
 }
 
 TEST(IrJson, RoundTrip) {
     const delve::Project p = loadFixtureProject();
     const std::string frozen_path = std::string(DELVE_TEST_DATA) + "/corner_frozen.json";
-    delve::IrV1 ir;
+    delve::IrV2 ir;
     std::string err;
-    ASSERT_TRUE(delve::build_ir_v1(readFile(frozen_path), frozen_path, p, "test", ir, err)) << err;
+    ASSERT_TRUE(delve::build_ir_v2(readFile(frozen_path), frozen_path, p, "test", ir, err)) << err;
     std::string t1, t2;
-    ASSERT_TRUE(delve::write_ir_v1_json(ir, t1, err)) << err;
-    delve::IrV1 back;
-    ASSERT_TRUE(delve::read_ir_v1_json(t1, back, err)) << err;
-    ASSERT_TRUE(delve::write_ir_v1_json(back, t2, err)) << err;
+    ASSERT_TRUE(delve::write_ir_v2_json(ir, t1, err)) << err;
+    delve::IrV2 back;
+    ASSERT_TRUE(delve::read_ir_v2_json(t1, back, err)) << err;
+    ASSERT_TRUE(delve::write_ir_v2_json(back, t2, err)) << err;
     EXPECT_EQ(t1, t2);  // byte-stable (N1/N6)
     EXPECT_EQ(back.rooms.size(), 2u);
     EXPECT_EQ(back.walls.size(), 9u);
@@ -460,14 +460,16 @@ TEST(IrJson, RoundTrip) {
 }
 
 TEST(IrJson, RejectsOtherFormats) {
-    delve::IrV1 ir;
+    delve::IrV2 ir;
     std::string err;
-    EXPECT_FALSE(delve::read_ir_v1_json("{", ir, err));
+    EXPECT_FALSE(delve::read_ir_v2_json("{", ir, err));
     EXPECT_NE(err.find("invalid JSON"), std::string::npos) << err;
     const std::string frozen = readFile(std::string(DELVE_D0_DIR) + "/frozen_ir.json");
     ASSERT_FALSE(frozen.empty());
-    EXPECT_FALSE(delve::read_ir_v1_json(frozen, ir, err));  // delve-ir/0 is not v1
-    EXPECT_NE(err.find("delve-ir/1"), std::string::npos) << err;
+    EXPECT_FALSE(delve::read_ir_v2_json(frozen, ir, err));  // delve-ir/0 is not v2
+    EXPECT_NE(err.find("delve-ir/2"), std::string::npos) << err;
+    EXPECT_FALSE(delve::read_ir_v2_json(R"({"format": "delve-ir/1"})", ir, err));
+    EXPECT_NE(err.find("int room ids"), std::string::npos) << err;  // N7 hint
 }
 
 TEST(Seeds, Stable31Bit) {

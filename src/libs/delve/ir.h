@@ -1,7 +1,8 @@
 #pragma once
 
-// Delve IR v1 (F4, docs/ir_v1.md): walls, nodes, doors, room developments and
+// Delve IR v2 (F4, docs/ir_v2.md): walls, nodes, doors, room developments and
 // transitions built from a frozen IR (delve-ir/0) + a fill project. No edgar.
+// v2 = v1 geometry with string room ids (frozen decimal form, D2: graph id).
 
 #include <map>
 #include <string>
@@ -12,13 +13,13 @@
 
 namespace delve {
 
-inline constexpr const char* kIrFormat = "delve-ir/1";
+inline constexpr const char* kIrFormat = "delve-ir/2";
 
 using GridPt = std::pair<int, int>;          // (gx, gy), grid units
 using WorldPt = std::pair<double, double>;   // (x, z), meters
 
 struct IrRoom {
-    int id = 0;  // frozen id; the v1 stable id is its decimal form (D2: graph id)
+    std::string id;  // frozen decimal form (D2: graph id)
     bool corridor = false;
     std::string role;  // corridor | hall (v1 mapping)
     std::vector<GridPt> grid;  // CCW-normalized contour (area2 < 0), world grid coords
@@ -31,8 +32,8 @@ struct IrRoom {
 struct IrWall {
     std::string id;  // wall:<x0>,<y0>-<x1>,<y1>
     bool outer = false;
-    int owner = -1;  // shared: min room id; outer: its room
-    int room_left = -1, room_right = -1;  // -1 = void
+    std::string owner;  // shared: min room id; outer: its room
+    std::string room_left, room_right;  // "" = void
     GridPt g0, g1;
     double thick = 0;  // owner's wall_t, meters
     double h_left = 0, h_right = 0;  // room heights; void side repeats owner h
@@ -59,7 +60,7 @@ struct ZonePiece {
 struct IrFacing {
     std::string id;  // fac:<room>:<edge>[.<k>]; .k iff the contour edge holds >1 atom
     std::string wall;
-    int room = -1;
+    std::string room;
     std::string style;  // 4.2 side resolution
     WorldPt from, to;  // seg ends, meters (y = 0 plane)
     WorldPt n;  // outward unit normal (xz)
@@ -78,7 +79,7 @@ struct IrFacing {
 struct IrNodeFace {
     WorldPt center;
     WorldPt n;  // outward unit normal
-    int room = -1;  // room looked into (-1 = void)
+    std::string room;  // room looked into ("" = void)
     double h = 0;  // looked-into room height (void: owner h)
     std::string style;  // looked-into side style (void: owner style)
     std::vector<ZonePiece> zones;  // ascending l (l = 0 at face center)
@@ -86,7 +87,7 @@ struct IrNodeFace {
 
 struct IrNode {
     std::string id;  // node:<gx>,<gy>
-    int owner = -1;  // min adjacent room id
+    std::string owner;  // min adjacent room id
     GridPt at;
     double thick = 0;
     double h_pillar = 0;  // max adjacent room h
@@ -95,7 +96,7 @@ struct IrNode {
 
 struct IrDoor {
     std::string id;  // door:<a>-<b>, a < b
-    int room_a = -1, room_b = -1;
+    std::string room_a, room_b;
     std::string wall;
     GridPt g0, g1;  // full 1-cell segment, lex-min first
     WorldPt from, to;  // CLEAR opening ends (frame already out), lex-min first
@@ -106,7 +107,7 @@ struct IrDoor {
 
 struct IrTransition {
     int id = -1;  // stable: order by (room, s0)
-    int room = -1;  // development owner
+    std::string room;  // development owner
     std::string style_a, style_b;  // incoming / outgoing (walk direction)
     int pattern = 0;
     double width = 0;  // configured width, meters
@@ -116,7 +117,7 @@ struct IrTransition {
     bool shortened = false;
 };
 
-struct IrV1 {
+struct IrV2 {
     std::string frozen_path, project_path;
     std::vector<IrRoom> rooms;  // by id
     std::vector<IrWall> walls;  // by id
@@ -125,19 +126,19 @@ struct IrV1 {
     std::vector<IrDoor> doors;  // by id
     std::vector<IrTransition> transitions;  // by id
     std::vector<std::string> warnings;  // shortenings, in deterministic order
-    std::map<int, double> corridor_clear;  // corridor id -> min clear width, meters
+    std::map<std::string, double> corridor_clear;  // corridor id -> min clear width, meters
 };
 
 // Build from frozen IR JSON text (delve-ir/0) + a loaded project. False + err
 // on structural problems (unpaired door, door crossing a T, non-rect room,
 // multi-cell door, bad 5.4 geometry); minima enforcement is F11, not F4.
-bool build_ir_v1(const std::string& frozen_json, const std::string& frozen_path,
-                 const Project& project, const std::string& project_path, IrV1& out,
+bool build_ir_v2(const std::string& frozen_json, const std::string& frozen_path,
+                 const Project& project, const std::string& project_path, IrV2& out,
                  std::string& err);
 
 // F5 artifact: stable-key JSON (N6). read rejects other formats (N7).
-bool write_ir_v1_json(const IrV1& ir, std::string& text_out, std::string& err);
-bool read_ir_v1_json(const std::string& text, IrV1& out, std::string& err);
+bool write_ir_v2_json(const IrV2& ir, std::string& text_out, std::string& err);
+bool read_ir_v2_json(const std::string& text, IrV2& out, std::string& err);
 
 // Unit/zone seeds (slots §1, §5.6): FNV-1a over "fill_seed/unit_id" resp.
 // "transition/<id>", masked to 31 bits.

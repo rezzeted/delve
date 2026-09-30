@@ -118,11 +118,11 @@ delve::Project loadD1Project() {
     return p;
 }
 
-delve::IrV1 buildD1Ir(const delve::Project& p) {
-    delve::IrV1 ir;
+delve::IrV2 buildD1Ir(const delve::Project& p) {
+    delve::IrV2 ir;
     std::string err;
     const std::string path = std::string(DELVE_D0_DIR) + "/frozen_ir.json";
-    EXPECT_TRUE(delve::build_ir_v1(readFile(path), path, p, "test", ir, err)) << err;
+    EXPECT_TRUE(delve::build_ir_v2(readFile(path), path, p, "test", ir, err)) << err;
     return ir;
 }
 
@@ -152,7 +152,7 @@ const std::vector<glm::vec3>* vec3Col(const pgg::GeoPtr& g, const char* name) {
 
 TEST(DelveFill, FillFrozenLevel) {
     delve::Project p = loadD1Project();
-    const delve::IrV1 ir = buildD1Ir(p);
+    const delve::IrV2 ir = buildD1Ir(p);
     delve::FillOpts opts;
     opts.delve_assets = DELVE_ASSETS_DIR;
     delve::FillResult out;
@@ -197,7 +197,7 @@ TEST(DelveFill, FillFrozenLevel) {
         ++perUnit[unit];
     }
     for (const auto& r : ir.rooms) {
-        const int n = perUnit["room:" + std::to_string(r.id)];
+        const int n = perUnit["room:" + r.id];
         EXPECT_EQ(n, r.role == "hall" ? 2 : 1) << r.id;
     }
     for (size_t k = 0; k < out.stats.lamps; ++k)
@@ -206,7 +206,7 @@ TEST(DelveFill, FillFrozenLevel) {
 
 TEST(DelveFill, FillDeterministic) {
     delve::Project p = loadD1Project();
-    const delve::IrV1 ir = buildD1Ir(p);
+    const delve::IrV2 ir = buildD1Ir(p);
     delve::FillOpts opts;
     opts.delve_assets = DELVE_ASSETS_DIR;
     delve::FillResult a, b;
@@ -227,7 +227,7 @@ TEST(DelveFill, FillDeterministic) {
 // must match the same asset run directly in the world frame.
 TEST(DelveFill, RotatedFrameEquivalence) {
     delve::Project p = loadD1Project();
-    const delve::IrV1 ir = buildD1Ir(p);
+    const delve::IrV2 ir = buildD1Ir(p);
     // Prefer a vertical facing hosting a transition zone.
     const delve::IrFacing* target = nullptr;
     for (const auto& f : ir.facings) {
@@ -258,7 +258,7 @@ TEST(DelveFill, RotatedFrameEquivalence) {
     delve::FillOpts opts;
     opts.delve_assets = DELVE_ASSETS_DIR;
     // Keep only the target facing (drop everything else from a scratch IR).
-    delve::IrV1 one;
+    delve::IrV2 one;
     one.rooms = ir.rooms;  // rooms expand but run empty assets
     one.facings = {*target};
     delve::FillResult filled;
@@ -430,7 +430,7 @@ TEST(DelveFill, AssetVariants) {
 
 TEST(DelveFill, FillRejects) {
     delve::Project p = loadD1Project();
-    const delve::IrV1 ir = buildD1Ir(p);
+    const delve::IrV2 ir = buildD1Ir(p);
     delve::FillOpts opts;
     opts.delve_assets = DELVE_ASSETS_DIR;
     delve::FillResult out;

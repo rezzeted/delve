@@ -58,7 +58,7 @@ struct FillOpts {
     unsigned threads = 0;  // 0 = PGG default (hardware)
 };
 
-bool fill_level(const IrV1& ir, const Project& project, const FillOpts& opts,
+bool fill_level(const IrV2& ir, const Project& project, const FillOpts& opts,
                 FillResult& out, std::string& err);
 
 }  // namespace delve

@@ -35,14 +35,14 @@ delve::Project loadD1Project() {
     return p;
 }
 
-delve::IrV1 buildIr(const delve::Project& p, const std::string& frozen) {
-    delve::IrV1 ir;
+delve::IrV2 buildIr(const delve::Project& p, const std::string& frozen) {
+    delve::IrV2 ir;
     std::string err;
-    EXPECT_TRUE(delve::build_ir_v1(readFile(frozen), frozen, p, "test", ir, err)) << err;
+    EXPECT_TRUE(delve::build_ir_v2(readFile(frozen), frozen, p, "test", ir, err)) << err;
     return ir;
 }
 
-delve::FillResult fillIr(const delve::IrV1& ir, const delve::Project& p) {
+delve::FillResult fillIr(const delve::IrV2& ir, const delve::Project& p) {
     delve::FillOpts opts;
     opts.delve_assets = DELVE_ASSETS_DIR;
     delve::FillResult out;
@@ -66,7 +66,7 @@ bool hasDiag(const std::vector<delve::CheckDiag>& ds, const std::string& check,
 
 TEST(DelveCheck, PassFrozen) {
     delve::Project p = loadD1Project();
-    const delve::IrV1 ir = buildIr(p, std::string(DELVE_D0_DIR) + "/frozen_ir.json");
+    const delve::IrV2 ir = buildIr(p, std::string(DELVE_D0_DIR) + "/frozen_ir.json");
     const delve::FillResult fill = fillIr(ir, p);
     std::vector<delve::CheckDiag> ds;
     EXPECT_TRUE(delve::check_level(ir, p, fill, ds)) << diagText(ds);
@@ -74,7 +74,7 @@ TEST(DelveCheck, PassFrozen) {
 
 TEST(DelveCheck, PassCorner) {
     delve::Project p = loadD1Project();
-    const delve::IrV1 ir = buildIr(p, std::string(DELVE_TEST_DATA) + "/corner_frozen.json");
+    const delve::IrV2 ir = buildIr(p, std::string(DELVE_TEST_DATA) + "/corner_frozen.json");
     ASSERT_EQ(ir.rooms.size(), 2u);
     ASSERT_EQ(ir.doors.size(), 1u);
     const delve::FillResult fill = fillIr(ir, p);
@@ -84,7 +84,7 @@ TEST(DelveCheck, PassCorner) {
 
 TEST(DelveCheck, PassageRejects) {
     delve::Project p = loadD1Project();
-    const delve::IrV1 ir = buildIr(p, std::string(DELVE_TEST_DATA) + "/corner_frozen.json");
+    const delve::IrV2 ir = buildIr(p, std::string(DELVE_TEST_DATA) + "/corner_frozen.json");
     ASSERT_FALSE(ir.corridor_clear.empty());
     ASSERT_FALSE(ir.doors.empty());
     {
@@ -107,7 +107,7 @@ TEST(DelveCheck, VoidsReject) {
     delve::Project p = loadD1Project();
     p.asset_roots = {"src/tests/data", "assets"};
     p.slots["wall_body"] = "fill/body_nocuts_v1.pgg";
-    const delve::IrV1 ir = buildIr(p, std::string(DELVE_TEST_DATA) + "/corner_frozen.json");
+    const delve::IrV2 ir = buildIr(p, std::string(DELVE_TEST_DATA) + "/corner_frozen.json");
     const delve::FillResult fill = fillIr(ir, p);
     std::vector<delve::CheckDiag> ds;
     EXPECT_FALSE(delve::check_opening_voids(ir, fill, ds));
@@ -122,7 +122,7 @@ TEST(DelveCheck, TransitionsReject) {
         p.fill.transitions.place = "wall";
         p.asset_roots = {"src/tests/data", "assets"};
         p.slots["facing"] = "fill/facing_nozones_v1.pgg";
-        const delve::IrV1 ir = buildIr(p, std::string(DELVE_TEST_DATA) + "/corner_frozen.json");
+        const delve::IrV2 ir = buildIr(p, std::string(DELVE_TEST_DATA) + "/corner_frozen.json");
         size_t zoned = 0;
         for (const auto& f : ir.facings) zoned += f.zones.size();
         ASSERT_GT(zoned, 0u) << "wall-placed corner IR must zone facings";
@@ -137,7 +137,7 @@ TEST(DelveCheck, TransitionsReject) {
         delve::Project p = loadD1Project();
         p.asset_roots = {"src/tests/data", "assets"};
         p.slots["node"] = "fill/node_nozones_v1.pgg";
-        const delve::IrV1 ir = buildIr(p, std::string(DELVE_TEST_DATA) + "/corner_frozen.json");
+        const delve::IrV2 ir = buildIr(p, std::string(DELVE_TEST_DATA) + "/corner_frozen.json");
         size_t zoned = 0;
         for (const auto& n : ir.nodes)
             for (const auto& fc : n.faces) zoned += fc.zones.size();
@@ -155,7 +155,7 @@ TEST(DelveCheck, TransitionsReject) {
         p.fill.transitions.place = "wall";
         p.asset_roots = {"src/tests/data", "assets"};
         p.slots["facing"] = "fill/facing_nozones_v1.pgg";
-        const delve::IrV1 ir = buildIr(p, std::string(DELVE_TEST_DATA) + "/corner_frozen.json");
+        const delve::IrV2 ir = buildIr(p, std::string(DELVE_TEST_DATA) + "/corner_frozen.json");
         const delve::FillResult fill = fillIr(ir, p);
         std::vector<delve::CheckDiag> ds;
         EXPECT_FALSE(delve::check_transitions(ir, p, fill, ds));
@@ -165,7 +165,7 @@ TEST(DelveCheck, TransitionsReject) {
 
 TEST(DelveCheck, SpansReject) {
     delve::Project p = loadD1Project();
-    delve::IrV1 ir = buildIr(p, std::string(DELVE_D0_DIR) + "/frozen_ir.json");
+    delve::IrV2 ir = buildIr(p, std::string(DELVE_D0_DIR) + "/frozen_ir.json");
     ASSERT_GT(ir.walls.size(), 0u);
     ir.walls.push_back(ir.walls[0]);  // duplicated atom
     std::vector<delve::CheckDiag> ds;
@@ -192,7 +192,7 @@ const delve::FillResult::UnitSpan* findSpan(const delve::FillResult& fill,
     return nullptr;
 }
 
-size_t checkPaint(const delve::IrV1& ir, const delve::FillResult& fill,
+size_t checkPaint(const delve::IrV2& ir, const delve::FillResult& fill,
                    const std::string& tag) {
     if (!fill.mesh->pointAttrs) {
         ADD_FAILURE() << tag;
@@ -319,7 +319,7 @@ size_t checkPaint(const delve::IrV1& ir, const delve::FillResult& fill,
 // (slots §2.4), l = 0 at the face center; elements are thick/2 long with no
 // bond. Only the dressing is asserted: pillar faces and dressing backs sit
 // exactly ON the face plane (d = thick/2), fronts/caps stick out to +0.05.
-size_t checkNodePaint(const delve::IrV1& ir, const delve::FillResult& fill,
+size_t checkNodePaint(const delve::IrV2& ir, const delve::FillResult& fill,
                      const std::string& tag, double cell) {
     const pgg::AttrColumn* c = fill.mesh->pointAttrs->find("style");
     const auto* v = std::get_if<std::shared_ptr<const std::vector<int64_t>>>(&c->data);
@@ -407,7 +407,7 @@ TEST(DelveCheck, TransitionPaintStoneBrick) {
             delve::Project p = loadD1Project();
             p.fill.transitions.pattern = pattern;
             p.fill.transitions.place = place;
-            const delve::IrV1 ir =
+            const delve::IrV2 ir =
                 buildIr(p, std::string(DELVE_TEST_DATA) + "/corner_frozen.json");
             size_t stone_brick = 0;
             for (const auto& t : ir.transitions) {
