@@ -1,0 +1,43 @@
+{
+  "format": "delve-project/1",
+  "seed": 3,
+  "layout": {
+    "corridors": {"width": 2, "length": [3, 4]},
+    "rooms_rect": {"w": [4, 5], "h": [4, 5]},
+    "door_length": 2,
+    "door_corner_distance": 1,
+    "min_room_distance": 0,
+    "catalog_budget": 64,
+    "rooms": [
+      {"id": "entry", "role": "entry"},
+      {"id": "hall", "role": "hall"}
+    ],
+    "passages": [
+      {"a": "entry", "b": "hall", "door": "gate"}
+    ]
+  },
+  "fill": {
+    "cell": 2.0,
+    "wall_t": 0.6,
+    "min_passage": 1.2,
+    "min_opening": 0.8,
+    "room_h": 3.0,
+    "door_h": 2.2,
+    "frame": 0.15,
+    "lamp_step": 4.0,
+    "row_module": 0.25,
+    "roles": {
+      "*": {"h": 3.0, "style": "stone", "floor": "stone", "ceil": "plain"}
+    },
+    "transitions": {"pattern": "butt", "width": 1.0, "place": "corner"}
+  },
+  "slots": {
+    "room_fill": "rooms/fill_v1.pgg",
+    "wall_body": "walls/body_v1.pgg",
+    "facing": "walls/facing_v1.pgg",
+    "node": "walls/node_v1.pgg",
+    "door": "doors/opening_v1.pgg",
+    "decor:lamp": "decor/lamp_v1.pgg"
+  },
+  "asset_roots": ["assets"]
+}

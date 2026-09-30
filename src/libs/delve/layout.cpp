@@ -667,6 +667,127 @@ int template_min_bbox_side(const TemplateDecl& t) {
     return std::min(max_x - min_x, max_y - min_y);
 }
 
+bool read_layout_json(const std::string& text, LayoutData& out, std::string& err) {
+    nlohmann::json doc;
+    try {
+        doc = nlohmann::json::parse(text);
+    } catch (const std::exception& e) {
+        err = std::string("layout: invalid JSON: ") + e.what();
+        return false;
+    }
+    if (!doc.is_object()) {
+        err = "layout: expected a JSON object";
+        return false;
+    }
+    if (doc.value("format", std::string{}) != kLayoutFormat) {
+        err = "layout: unsupported format \"" + doc.value("format", std::string{}) +
+              "\", expected \"" + kLayoutFormat + "\" (regenerate the layout from the project)";
+        return false;
+    }
+    LayoutData data;
+    if (doc.contains("source")) {
+        const auto& s = doc["source"];
+        if (!s.is_object() || !s.contains("project") || !s["project"].is_string() ||
+            !s.contains("seed") || !s["seed"].is_number_integer()) {
+            err = "layout.source: expected {project: string, seed: int}";
+            return false;
+        }
+        data.source_project = s["project"].get<std::string>();
+        data.source_seed = s["seed"].get<int>();
+    }
+    if (!doc.contains("rooms") || !doc["rooms"].is_array()) {
+        err = "layout.rooms: expected an array";
+        return false;
+    }
+    std::set<std::string> ids;
+    for (size_t i = 0; i < doc["rooms"].size(); ++i) {
+        const std::string where = "layout.rooms[" + std::to_string(i) + "]";
+        const auto& jr = doc["rooms"][i];
+        if (!jr.is_object()) {
+            err = where + ": expected an object";
+            return false;
+        }
+        for (const auto& [key, _] : jr.items()) {
+            if (key != "id" && key != "role" && key != "template" && key != "corridor" &&
+                key != "grid" && key != "doors") {
+                err = where + "." + key + ": unknown key";
+                return false;
+            }
+        }
+        LayoutRoomData r;
+        if (!jr.contains("id") || !jr["id"].is_string() || jr["id"].get<std::string>().empty()) {
+            err = where + ".id: expected a non-empty string";
+            return false;
+        }
+        r.id = jr["id"].get<std::string>();
+        if (!ids.insert(r.id).second) {
+            err = where + ".id: duplicate room \"" + r.id + "\"";
+            return false;
+        }
+        if (!jr.contains("role") || !jr["role"].is_string() ||
+            !is_concrete_role(jr["role"].get<std::string>())) {
+            err = where + ".role: expected hall|corridor|crypt|entry|stairs";
+            return false;
+        }
+        r.role = jr["role"].get<std::string>();
+        if (!jr.contains("template") || !jr["template"].is_string() ||
+            jr["template"].get<std::string>().empty()) {
+            err = where + ".template: expected a non-empty string";
+            return false;
+        }
+        r.tmpl = jr["template"].get<std::string>();
+        if (!jr.contains("corridor") || !jr["corridor"].is_boolean()) {
+            err = where + ".corridor: expected a boolean";
+            return false;
+        }
+        r.corridor = jr["corridor"].get<bool>();
+        if (!jr.contains("grid") || !jr["grid"].is_array() || jr["grid"].size() < 4) {
+            err = where + ".grid: expected an array of >= 4 [x, y] points";
+            return false;
+        }
+        for (size_t k = 0; k < jr["grid"].size(); ++k) {
+            CellPt p;
+            if (!get_cell_pt(jr["grid"][k], p, err, where + ".grid[" + std::to_string(k) + "]"))
+                return false;
+            r.grid.push_back(p);
+        }
+        if (!jr.contains("doors") || !jr["doors"].is_array()) {
+            err = where + ".doors: expected an array";
+            return false;
+        }
+        for (size_t k = 0; k < jr["doors"].size(); ++k) {
+            const std::string dw = where + ".doors[" + std::to_string(k) + "]";
+            const auto& jd = jr["doors"][k];
+            if (!jd.is_object() || !jd.contains("to") || !jd["to"].is_string() ||
+                jd["to"].get<std::string>().empty()) {
+                err = dw + ": expected {to: room id, grid: [p, p]}";
+                return false;
+            }
+            LayoutRoomData::Door d;
+            d.to = jd["to"].get<std::string>();
+            if (!jd.contains("grid") || !jd["grid"].is_array() || jd["grid"].size() != 2) {
+                err = dw + ": expected {to: room id, grid: [p, p]}";
+                return false;
+            }
+            if (!get_cell_pt(jd["grid"][0], d.g0, err, dw + ".grid[0]")) return false;
+            if (!get_cell_pt(jd["grid"][1], d.g1, err, dw + ".grid[1]")) return false;
+            if (d.g1 < d.g0) std::swap(d.g0, d.g1);
+            r.doors.push_back(std::move(d));
+        }
+        std::sort(r.doors.begin(), r.doors.end(),
+                  [](const LayoutRoomData::Door& a, const LayoutRoomData::Door& b) {
+                      if (a.to != b.to) return a.to < b.to;
+                      if (a.g0 != b.g0) return a.g0 < b.g0;
+                      return a.g1 < b.g1;
+                  });
+        data.rooms.push_back(std::move(r));
+    }
+    std::sort(data.rooms.begin(), data.rooms.end(),
+              [](const LayoutRoomData& a, const LayoutRoomData& b) { return a.id < b.id; });
+    out = std::move(data);
+    return true;
+}
+
 int manual_door_min_corner(const TemplateDecl& t) {
     if (!t.doors.manual) return -1;
     int best = -1;

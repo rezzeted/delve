@@ -3,6 +3,8 @@ add_library(delve_layout STATIC
     pch.h
     catalog.h
     catalog.cpp
+    generate.h
+    generate.cpp
 )
 target_include_directories(delve_layout PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_precompile_headers(delve_layout PRIVATE pch.h)

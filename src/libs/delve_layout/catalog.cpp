@@ -165,8 +165,11 @@ bool build_room_descriptions(
                 err = "catalog: internal: room \"" + room.id + "\" has no templates (R-G3 missed it)";
                 return false;
             }
-            desc.emplace(room.id, grid2d::RoomDescriptionGrid2D(room.role == "corridor",
-                                                               std::move(ts), /*stage=*/1));
+            // C# CorridorRoomDescription is always stage 2 (two-stage chain
+            // decomposition attaches corridors after the stage-one layout).
+            const bool corridor = room.role == "corridor";
+            desc.emplace(room.id, grid2d::RoomDescriptionGrid2D(corridor, std::move(ts),
+                                                               corridor ? 2 : 1));
         }
         out = std::move(desc);
         return true;
