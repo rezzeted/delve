@@ -1,0 +1,18 @@
+def slot_version() -> (out: int) {
+    out = 1 + 0
+}
+
+param seg: geo<points>
+param n: vec3 = (0.0, 0.0, 1.0)
+param h: f32 = 3.0
+param style: int = 1
+param module: f32 = 0.25
+param cuts: geo<points>
+param zones: geo<points>
+param rng_seed: int = 7
+
+mesh = empty_mesh()
+anchors = empty_points()
+
+output mesh
+output anchors
