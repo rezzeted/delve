@@ -13,7 +13,8 @@
 namespace delve {
 
 struct CheckDiag {
-    std::string check;    // passage | opening_voids | transitions | anchors | spans | elements
+    std::string check;    // passage | opening_voids | transitions | anchors | spans | elements |
+                          // facing_bounds
     std::string message;  // F11/<check>: detail with numbers
 };
 
@@ -42,6 +43,12 @@ bool check_spans(const IrV2& ir, const Project& project, std::vector<CheckDiag>&
 // same-normal faces (double geometry; touching solids have opposite normals,
 // embedded parts live on different planes, so both pass).
 bool check_elements(const FillResult& fill, std::vector<CheckDiag>& diags);
+
+// Facing dressing belongs to its room's side (5.2): every mesh point of a
+// facing unit lies inside (or within 1e-4 of) the room's contour. Catches
+// side inversions that zone/span checks cannot see (they are s/l-relative).
+bool check_facing_bounds(const IrV2& ir, const Project& project, const FillResult& fill,
+                         std::vector<CheckDiag>& diags);
 
 bool check_level(const IrV2& ir, const Project& project, const FillResult& fill,
                  std::vector<CheckDiag>& diags);

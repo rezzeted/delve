@@ -10,6 +10,8 @@
 #include <sstream>
 #include <string>
 
+#include <nlohmann/json.hpp>
+
 #include "ir.h"
 #include "project.h"
 
@@ -21,6 +23,16 @@ std::string readFile(const std::string& path) {
     std::ostringstream s;
     s << in.rdbuf();
     return s.str();
+}
+
+// Replace the unique `from` substring; fails the test when absent/ambiguous.
+std::string surgery(const std::string& text, const std::string& from, const std::string& to) {
+    const size_t first = text.find(from);
+    EXPECT_NE(first, std::string::npos) << "anchor missing: " << from;
+    EXPECT_EQ(text.find(from, first + 1), std::string::npos) << "anchor ambiguous: " << from;
+    std::string out = text;
+    out.replace(first, from.size(), to);
+    return out;
 }
 
 void writeFile(const std::string& path, const std::string& text) {
@@ -382,7 +394,10 @@ TEST(IrCorner, RetuneWithoutEdgar) {
     EXPECT_DOUBLE_EQ(f0->s0, 25.4);  // 20*1.25 + 0.4
     EXPECT_DOUBLE_EQ(f0->s1, 27.1);  // 25 + 1*2.5 - 0.4
     EXPECT_DOUBLE_EQ(f0->from.first, 14.6);  // 6*2.5 - 0.4
-    EXPECT_DOUBLE_EQ(f0->from.second, -0.4);
+    // Side normal points INTO the room (D2.3b fix): room 0 is z >= 0, so its
+    // bottom-wall facing sits at +wall_t/2 (was -0.4 on the far side before).
+    EXPECT_DOUBLE_EQ(f0->from.second, 0.4);
+    EXPECT_DOUBLE_EQ(f0->n.second, 1.0);
 }
 
 TEST(IrErrors, DoorOffset) {
@@ -482,4 +497,355 @@ TEST(Seeds, Stable31Bit) {
     EXPECT_EQ(z, delve::zone_seed(3));
     EXPECT_NE(z, delve::zone_seed(4));
     EXPECT_GE(z, 0);
+}
+
+// --- D2.3b: IR from a generated layout (delve-layout/0) ----------------------
+
+namespace {
+
+// A v1 project: d1 fill params + a programmatic layout tier (F1 validation is
+// load_project's business; the IR builder is exercised directly).
+delve::Project loadD1AsV1(delve::LayoutParams lp) {
+    delve::Project p = loadFixtureProject();
+    p.format = delve::kProjectFormatV1;
+    p.layout = std::move(lp);
+    return p;
+}
+
+delve::LayoutParams cornerGraph() {
+    delve::LayoutParams lp;
+    delve::GraphRoom r0;
+    r0.id = "0";
+    r0.role = "hall";
+    delve::GraphRoom r1;
+    r1.id = "1";
+    r1.role = "corridor";
+    lp.rooms = {r0, r1};
+    delve::Passage pass;
+    pass.a = "0";
+    pass.b = "1";
+    pass.door = "open";
+    lp.passages = {pass};
+    return lp;
+}
+
+// corner_frozen.json geometry as delve-layout/0 text (ids stringified, roles
+// from the corridor flag, parametric template names).
+std::string cornerLayoutText() {
+    const auto doc =
+        nlohmann::json::parse(readFile(std::string(DELVE_TEST_DATA) + "/corner_frozen.json"));
+    nlohmann::ordered_json out;
+    out["format"] = "delve-layout/0";
+    out["source"] = {{"project", "corner"}, {"seed", 0}};
+    nlohmann::ordered_json rooms = nlohmann::ordered_json::array();
+    for (const auto& jr : doc["rooms"]) {
+        const bool corr = jr["corridor"].get<bool>();
+        nlohmann::ordered_json doors = nlohmann::ordered_json::array();
+        for (const auto& jd : jr["doors"])
+            doors.push_back({{"to", std::to_string(jd["to"].get<int>())}, {"grid", jd["grid"]}});
+        rooms.push_back({{"id", std::to_string(jr["id"].get<int>())},
+                         {"role", corr ? "corridor" : "hall"},
+                         {"template", "param"},
+                         {"corridor", corr},
+                         {"grid", jr["grid"]},
+                         {"doors", std::move(doors)}});
+    }
+    out["rooms"] = std::move(rooms);
+    return out.dump() + "\n";
+}
+
+// Two 4x4 rooms side by side (a west, b east), one 2-cell door on x=4.
+std::string abLayoutText(const std::string& door_seg = "[[4, 1], [4, 3]]") {
+    std::string text = R"({"format": "delve-layout/0", "source": {"project": "t", "seed": 0},
+ "rooms": [
+  {"id": "a", "role": "hall", "template": "param", "corridor": false,
+   "grid": [[0, 0], [4, 0], [4, 4], [0, 4]],
+   "doors": [{"to": "b", "grid": @DOOR@}]},
+  {"id": "b", "role": "crypt", "template": "param", "corridor": false,
+   "grid": [[4, 0], [8, 0], [8, 4], [4, 4]],
+   "doors": [{"to": "a", "grid": @DOOR@}]}
+ ]}
+)";
+    for (size_t pos = 0; (pos = text.find("@DOOR@", pos)) != std::string::npos;)
+        text.replace(pos, 6, door_seg);
+    return text;
+}
+
+delve::LayoutParams abGraph(const std::string& door = "gate") {
+    delve::LayoutParams lp;
+    delve::GraphRoom a;
+    a.id = "a";
+    a.role = "hall";
+    delve::GraphRoom b;
+    b.id = "b";
+    b.role = "crypt";
+    lp.rooms = {a, b};
+    delve::Passage pass;
+    pass.a = "a";
+    pass.b = "b";
+    pass.door = door;
+    lp.passages = {pass};
+    return lp;
+}
+
+}  // namespace
+
+TEST(IrFromLayout, MatchesFrozenPath) {
+    std::string err;
+    delve::Project pv0 = loadFixtureProject();
+    const std::string frozen_path = std::string(DELVE_TEST_DATA) + "/corner_frozen.json";
+    delve::IrV2 a;
+    ASSERT_TRUE(delve::build_ir_v2(readFile(frozen_path), frozen_path, pv0, "test", a, err)) << err;
+
+    delve::Project pv1 = loadD1AsV1(cornerGraph());
+    delve::LayoutData ld;
+    ASSERT_TRUE(delve::read_layout_json(cornerLayoutText(), ld, err)) << err;
+    delve::IrV2 b;
+    ASSERT_TRUE(delve::build_ir_from_layout(ld, pv1, "test", b, err)) << err;
+    EXPECT_TRUE(b.from_layout);
+
+    std::string ta, tb;
+    ASSERT_TRUE(delve::write_ir_v2_json(a, ta, err));
+    ASSERT_TRUE(delve::write_ir_v2_json(b, tb, err));
+    auto ja = nlohmann::ordered_json::parse(ta);
+    auto jb = nlohmann::ordered_json::parse(tb);
+    ja.erase("source");  // provenance differs by construction
+    jb.erase("source");
+    EXPECT_EQ(ja.dump(), jb.dump());  // byte-identical IR from both paths
+}
+
+TEST(IrFromLayout, DoorTypeLengthAndThickness) {
+    delve::Project p = loadD1AsV1(abGraph());
+    p.fill.roles["hall"].wall_t = 0.5;  // equal on both sides: legal (5.2)
+    p.fill.roles["crypt"].wall_t = 0.5;
+    delve::LayoutData ld;
+    std::string err;
+    ASSERT_TRUE(delve::read_layout_json(abLayoutText(), ld, err)) << err;
+    delve::IrV2 ir;
+    ASSERT_TRUE(delve::build_ir_from_layout(ld, p, "test", ir, err)) << err;
+
+    ASSERT_EQ(ir.doors.size(), 1u);
+    EXPECT_EQ(ir.doors[0].id, "door:a-b");
+    EXPECT_EQ(ir.doors[0].dtype, 2);  // gate, from the passage edge
+    EXPECT_DOUBLE_EQ(ir.doors[0].clear, 4.0 - 2.0 * 0.15);  // 2 cells x 2.0 m
+    EXPECT_DOUBLE_EQ(ir.doors[0].thick, 0.5);
+
+    EXPECT_EQ(ir.walls.size(), 7u);  // 6 outer + 1 shared
+    EXPECT_EQ(ir.nodes.size(), 6u);
+    EXPECT_EQ(ir.facings.size(), 8u);
+    for (const auto& w : ir.walls) {
+        EXPECT_DOUBLE_EQ(w.thick, 0.5) << w.id;
+        EXPECT_DOUBLE_EQ(w.t_end0, 0.5) << w.id;
+        EXPECT_DOUBLE_EQ(w.t_end1, 0.5) << w.id;
+    }
+    // The shared wall's facings carry the full 2-cell cut on both sides.
+    const delve::IrFacing* fa = findFacing(ir, "fac:a:1");
+    const delve::IrFacing* fb = findFacing(ir, "fac:b:3");
+    ASSERT_NE(fa, nullptr);
+    ASSERT_NE(fb, nullptr);
+    ASSERT_EQ(fa->cuts.size(), 1u);
+    ASSERT_EQ(fb->cuts.size(), 1u);
+    EXPECT_DOUBLE_EQ(std::hypot(fa->cuts[0].b.first - fa->cuts[0].a.first,
+                                fa->cuts[0].b.second - fa->cuts[0].a.second),
+                     4.0);
+    // Room ids are the graph's; roles come from the graph, not the corridor flag.
+    EXPECT_EQ(ir.rooms[0].id, "a");
+    EXPECT_EQ(ir.rooms[0].role, "hall");
+    EXPECT_EQ(ir.rooms[1].role, "crypt");
+    // Styles: hall room base is stone (d1 roles); crypt has no entry -> "*".
+    EXPECT_EQ(ir.rooms[0].style, "stone");
+    EXPECT_EQ(ir.rooms[1].style, "stone");
+    // No corridors -> no derived clears; no style splits -> no transitions.
+    EXPECT_TRUE(ir.corridor_clear.empty());
+    EXPECT_TRUE(ir.transitions.empty());
+}
+
+TEST(IrFromLayout, SharedWallThicknessMismatch) {
+    delve::Project p = loadD1AsV1(abGraph());
+    p.fill.roles["hall"].wall_t = 0.5;
+    p.fill.roles["crypt"].wall_t = 0.7;
+    delve::LayoutData ld;
+    std::string err;
+    ASSERT_TRUE(delve::read_layout_json(abLayoutText(), ld, err)) << err;
+    delve::IrV2 ir;
+    EXPECT_FALSE(delve::build_ir_from_layout(ld, p, "test", ir, err));
+    EXPECT_NE(err.find("rooms a and b"), std::string::npos) << err;
+    EXPECT_NE(err.find("5.2"), std::string::npos) << err;
+}
+
+TEST(IrFromLayout, FillOverridesReachIR) {
+    delve::LayoutParams lp;
+    delve::GraphRoom h;
+    h.id = "h";
+    h.role = "hall";
+    h.fill.h = 3.5;  // room beats template/role/project
+    lp.rooms = {h};
+    delve::TemplateDecl grand;
+    grand.name = "grand";
+    grand.roles = {"hall"};
+    grand.fill.style = "brick";  // template beats role/project
+    lp.templates = {grand};
+    delve::Project p = loadD1AsV1(lp);
+    p.fill.side_rules.clear();  // isolate the base style
+
+    delve::LayoutData ld;
+    std::string err;
+    ASSERT_TRUE(delve::read_layout_json(
+            R"({"format": "delve-layout/0", "source": {"project": "t", "seed": 0},
+                "rooms": [{"id": "h", "role": "hall", "template": "grand", "corridor": false,
+                           "grid": [[0, 0], [4, 0], [4, 4], [0, 4]], "doors": []}]})",
+            ld, err))
+        << err;
+    delve::IrV2 ir;
+    ASSERT_TRUE(delve::build_ir_from_layout(ld, p, "test", ir, err)) << err;
+    ASSERT_EQ(ir.rooms.size(), 1u);
+    EXPECT_DOUBLE_EQ(ir.rooms[0].h, 3.5);
+    EXPECT_EQ(ir.rooms[0].style, "brick");
+    ASSERT_FALSE(ir.facings.empty());
+    for (const auto& f : ir.facings) EXPECT_EQ(f.style, "brick") << f.id;
+}
+
+TEST(IrFromLayout, FiguredConcaveCorner) {
+    delve::LayoutParams lp;
+    delve::GraphRoom l;
+    l.id = "l";
+    l.role = "hall";
+    lp.rooms = {l};
+    delve::Project p = loadD1AsV1(lp);
+    p.fill.side_rules.clear();
+    delve::SideRule outer;
+    outer.side = "outer";
+    outer.style = "brick";
+    p.fill.side_rules.push_back(outer);
+
+    // L-shaped room (notch x in [2,4], y in [2,4]); concave corner at (2,2).
+    delve::LayoutData ld;
+    std::string err;
+    ASSERT_TRUE(delve::read_layout_json(
+            R"({"format": "delve-layout/0", "source": {"project": "t", "seed": 0},
+                "rooms": [{"id": "l", "role": "hall", "template": "param", "corridor": false,
+                           "grid": [[0, 0], [4, 0], [4, 2], [2, 2], [2, 4], [0, 4]],
+                           "doors": []}]})",
+            ld, err))
+        << err;
+    delve::IrV2 ir;
+    ASSERT_TRUE(delve::build_ir_from_layout(ld, p, "test", ir, err)) << err;
+
+    EXPECT_EQ(ir.walls.size(), 6u);
+    EXPECT_EQ(ir.nodes.size(), 6u);
+    EXPECT_EQ(ir.facings.size(), 6u);
+    EXPECT_TRUE(ir.transitions.empty());  // concave flanks resolve alike (v1 proof)
+    EXPECT_TRUE(ir.warnings.empty());
+
+    // Development intervals around the concave corner (s in meters, cell 2.0,
+    // pillar half 0.3): edge (2,4)->(2,2) then (2,2)->(4,2).
+    const delve::IrFacing* f1 = findFacing(ir, "fac:l:1");
+    const delve::IrFacing* f2 = findFacing(ir, "fac:l:2");
+    ASSERT_NE(f1, nullptr);
+    ASSERT_NE(f2, nullptr);
+    EXPECT_DOUBLE_EQ(f1->s0, 4.3);
+    EXPECT_DOUBLE_EQ(f1->s1, 7.7);
+    EXPECT_DOUBLE_EQ(f2->s0, 8.3);
+    EXPECT_DOUBLE_EQ(f2->s1, 11.7);
+
+    // The concave pillar: two open faces look into the room itself, styled
+    // from their flanks (brick by the outer rule), not the room base (stone).
+    const delve::IrNode* n = findNode(ir, "node:2,2");
+    ASSERT_NE(n, nullptr);
+    ASSERT_EQ(n->faces.size(), 2u);
+    for (const auto& f : n->faces) {
+        EXPECT_EQ(f.room, "l");
+        EXPECT_EQ(f.style, "brick");
+        EXPECT_TRUE(f.zones.empty());
+    }
+    // Normals: west and south (the two open directions at the 270-degree corner).
+    std::set<std::pair<double, double>> normals;
+    for (const auto& f : n->faces) normals.insert({f.n.first, f.n.second});
+    EXPECT_TRUE(normals.count({-1.0, 0.0}));
+    EXPECT_TRUE(normals.count({0.0, -1.0}));
+
+    // Stable round-trip with the figured contour.
+    std::string t1, t2;
+    ASSERT_TRUE(delve::write_ir_v2_json(ir, t1, err));
+    delve::IrV2 back;
+    ASSERT_TRUE(delve::read_ir_v2_json(t1, back, err)) << err;
+    ASSERT_TRUE(delve::write_ir_v2_json(back, t2, err));
+    EXPECT_EQ(t1, t2);
+}
+
+TEST(IrFromLayout, RejectsBadInput) {
+    delve::Project p = loadD1AsV1(abGraph());
+    std::string err;
+    delve::IrV2 ir;
+
+    // v0 project: no layout tier.
+    {
+        delve::Project p0 = loadFixtureProject();
+        delve::LayoutData ld;
+        EXPECT_FALSE(delve::build_ir_from_layout(ld, p0, "test", ir, err));
+        EXPECT_NE(err.find("layout tier"), std::string::npos) << err;
+    }
+    // Layout room not in the graph.
+    {
+        delve::LayoutData ld;
+        ASSERT_TRUE(delve::read_layout_json(
+                surgery(abLayoutText(), "\"id\": \"b\"", "\"id\": \"zz\""), ld, err))
+            << err;
+        EXPECT_FALSE(delve::build_ir_from_layout(ld, p, "test", ir, err));
+        EXPECT_NE(err.find("not in the project graph"), std::string::npos) << err;
+    }
+    // Graph room missing from the layout (same surgery, other direction).
+    {
+        delve::Project p2 = loadD1AsV1(abGraph());
+        delve::GraphRoom extra;
+        extra.id = "extra";
+        extra.role = "hall";
+        p2.layout->rooms.push_back(extra);
+        delve::LayoutData ld;
+        ASSERT_TRUE(delve::read_layout_json(abLayoutText(), ld, err)) << err;
+        EXPECT_FALSE(delve::build_ir_from_layout(ld, p2, "test", ir, err));
+        EXPECT_NE(err.find("missing from the layout"), std::string::npos) << err;
+    }
+    // Role mismatch vs the graph.
+    {
+        delve::LayoutData ld;
+        ASSERT_TRUE(delve::read_layout_json(
+                surgery(abLayoutText(), "\"role\": \"crypt\"", "\"role\": \"entry\""), ld, err))
+            << err;
+        EXPECT_FALSE(delve::build_ir_from_layout(ld, p, "test", ir, err));
+        EXPECT_NE(err.find("does not match the graph role"), std::string::npos) << err;
+    }
+    // Door without a passage.
+    {
+        delve::Project p3 = loadD1AsV1(abGraph());
+        p3.layout->passages.clear();
+        delve::LayoutData ld;
+        ASSERT_TRUE(delve::read_layout_json(abLayoutText(), ld, err)) << err;
+        EXPECT_FALSE(delve::build_ir_from_layout(ld, p3, "test", ir, err));
+        EXPECT_NE(err.find("has no passage"), std::string::npos) << err;
+    }
+    // Unpaired door (b lists a different segment).
+    {
+        delve::LayoutData ld;
+        const std::string text = abLayoutText();
+        const std::string from = "\"doors\": [{\"to\": \"a\", \"grid\": [[4, 1], [4, 3]]}]";
+        ASSERT_NE(text.find(from), std::string::npos);
+        std::string bad = text;
+        bad.replace(bad.find(from), from.size(),
+                    "\"doors\": [{\"to\": \"a\", \"grid\": [[4, 2], [4, 4]]}]");
+        ASSERT_TRUE(delve::read_layout_json(bad, ld, err)) << err;
+        EXPECT_FALSE(delve::build_ir_from_layout(ld, p, "test", ir, err));
+        EXPECT_NE(err.find("no matching entry"), std::string::npos) << err;
+    }
+    // Self-intersecting contour (orthogonal bowtie crossing at (2,1)).
+    {
+        delve::LayoutData ld;
+        ASSERT_TRUE(delve::read_layout_json(
+                surgery(abLayoutText(), "\"grid\": [[0, 0], [4, 0], [4, 4], [0, 4]]",
+                        "\"grid\": [[0, 1], [4, 1], [4, 4], [0, 4], [0, 3], [2, 3], [2, 0], [0, 0]]"),
+                ld, err))
+            << err;
+        EXPECT_FALSE(delve::build_ir_from_layout(ld, p, "test", ir, err));
+        EXPECT_NE(err.find("self-intersection"), std::string::npos) << err;
+    }
 }

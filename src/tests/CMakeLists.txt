@@ -57,7 +57,7 @@ set_property(TARGET delve_fill_test PROPERTY FOLDER tests)
 add_test(NAME delve_fill_test COMMAND delve_fill_test)
 
 add_executable(delve_check_test delve_check_test.cpp)
-target_link_libraries(delve_check_test PRIVATE GTest::gtest_main delve_check)
+target_link_libraries(delve_check_test PRIVATE GTest::gtest_main delve_check delve_layout)
 target_compile_definitions(delve_check_test PRIVATE
     DELVE_TEST_DATA="${CMAKE_SOURCE_DIR}/src/tests/data"
     DELVE_D0_DIR="${CMAKE_SOURCE_DIR}/docs/d0"

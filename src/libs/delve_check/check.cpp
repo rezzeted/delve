@@ -578,6 +578,70 @@ bool check_elements(const FillResult& fill, std::vector<CheckDiag>& diags) {
     return diags.size() == mark;
 }
 
+// --- facing bounds -----------------------------------------------------------
+
+namespace {
+
+bool ptInPolyXZ(const std::vector<std::pair<double, double>>& c, double x, double z) {
+    bool inside = false;
+    const size_t n = c.size();
+    for (size_t i = 0, j = n - 1; i < n; j = i++) {
+        const double xi = c[i].first, zi = c[i].second;
+        const double xj = c[j].first, zj = c[j].second;
+        if ((zi > z) != (zj > z) && x < (xj - xi) * (z - zi) / (zj - zi) + xi) inside = !inside;
+    }
+    return inside;
+}
+
+double distToPolyXZ(const std::vector<std::pair<double, double>>& c, double x, double z) {
+    double best = 1e300;
+    const size_t n = c.size();
+    for (size_t i = 0, j = n - 1; i < n; j = i++) {
+        const double ax = c[j].first, az = c[j].second;
+        const double bx = c[i].first, bz = c[i].second;
+        const double dx = bx - ax, dz = bz - az;
+        const double len2 = dx * dx + dz * dz;
+        const double t = len2 > 0 ? std::max(0.0, std::min(1.0, ((x - ax) * dx + (z - az) * dz) / len2))
+                                  : 0.0;
+        const double ex = ax + t * dx - x, ez = az + t * dz - z;
+        best = std::min(best, std::hypot(ex, ez));
+    }
+    return best;
+}
+
+}  // namespace
+
+bool check_facing_bounds(const IrV2& ir, const Project& project, const FillResult& fill,
+                         std::vector<CheckDiag>& diags) {
+    const size_t mark = diags.size();
+    if (!fill.mesh || fill.mesh->pointCount() == 0) return true;
+    std::map<std::string, const IrFacing*> facings;
+    for (const auto& f : ir.facings) facings[f.id] = &f;
+    std::map<std::string, const IrRoom*> rooms;
+    for (const auto& r : ir.rooms) rooms[r.id] = &r;
+    const double cell = project.fill.cell;
+    for (const auto& span : fill.units) {
+        if (span.slot != "facing") continue;
+        const auto fit = facings.find(span.id);
+        if (fit == facings.end()) continue;
+        const IrRoom* room = rooms[fit->second->room];
+        if (!room) continue;
+        std::vector<std::pair<double, double>> contour;
+        for (const auto& [gx, gy] : room->grid) contour.push_back({gx * cell, gy * cell});
+        for (size_t i = span.meshBegin; i < span.meshEnd; ++i) {
+            const glm::vec3& p = (*fill.mesh->positions)[i];
+            if (ptInPolyXZ(contour, p.x, p.z)) continue;
+            if (distToPolyXZ(contour, p.x, p.z) > 1e-4)
+                push(diags, mark, "facing_bounds",
+                     span.id + ": point (" + std::to_string(p.x) + ", " + std::to_string(p.z) +
+                         ") is outside room " + room->id +
+                         " (facing must hug the room's side of the wall, 5.2)");
+            if (diags.size() >= mark + kCap) return false;
+        }
+    }
+    return diags.size() == mark;
+}
+
 bool check_level(const IrV2& ir, const Project& project, const FillResult& fill,
                  std::vector<CheckDiag>& diags) {
     bool ok = true;
@@ -587,6 +651,7 @@ bool check_level(const IrV2& ir, const Project& project, const FillResult& fill,
     ok = check_anchors(ir, project, fill, diags) && ok;
     ok = check_spans(ir, project, diags) && ok;
     ok = check_elements(fill, diags) && ok;
+    ok = check_facing_bounds(ir, project, fill, diags) && ok;
     return ok;
 }
 

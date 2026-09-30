@@ -36,10 +36,13 @@ stone = set(merge(jamb_l, jamb_r, beam, sill), "Cd", frame_c, domain = points)
 leaf_bare = transform(box(size = vec3(L, h - 0.05, 0.08), res = 1), translate = vec3(L * 0.5, (h - 0.05) * 0.5 + 0.02, 0.0))
 leaf = set(leaf_bare, "Cd", leaf_c, domain = points)
 
-bar0 = transform(box(size = vec3(0.06, h - 0.1, 0.06), res = 1), translate = vec3(L * 0.25, h * 0.5, 0.0))
-bar1 = transform(box(size = vec3(0.06, h - 0.1, 0.06), res = 1), translate = vec3(L * 0.5, h * 0.5, 0.0))
-bar2 = transform(box(size = vec3(0.06, h - 0.1, 0.06), res = 1), translate = vec3(L * 0.75, h * 0.5, 0.0))
-rail = transform(box(size = vec3(L, 0.06, 0.06), res = 1), translate = vec3(L * 0.5, h * 0.6, 0.0))
+# Grate sits proud of the leaf (+z side). Bars and rail use different depths
+# and the rail is inset from the leaf edges: no two faces are coplanar
+# (F11 elements rejects z-fighting pairs; D2.3b regression probe).
+bar0 = transform(box(size = vec3(0.06, h - 0.1, 0.06), res = 1), translate = vec3(L * 0.25, h * 0.5, 0.08))
+bar1 = transform(box(size = vec3(0.06, h - 0.1, 0.06), res = 1), translate = vec3(L * 0.5, h * 0.5, 0.08))
+bar2 = transform(box(size = vec3(0.06, h - 0.1, 0.06), res = 1), translate = vec3(L * 0.75, h * 0.5, 0.08))
+rail = transform(box(size = vec3(L - 0.12, 0.05, 0.05), res = 1), translate = vec3(L * 0.5, h * 0.6, 0.08))
 bars = set(merge(bar0, bar1, bar2, rail), "Cd", iron_c, domain = points)
 
 local_mesh = merge(stone, leaf, select(dtype == c.DR_GATE(), a = bars, b = empty_mesh()))

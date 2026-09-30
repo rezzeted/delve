@@ -172,8 +172,10 @@ bool expandBody(const IrWall& w, const IrV2& ir, double cell, int fill_seed,
     const double bx = w.g1.first * cell, bz = w.g1.second * cell;
     const double span = std::hypot(bx - ax, bz - az);
     const double dx = (bx - ax) / span, dz = (bz - az) / span;
-    const double fx = ax + dx * w.thick / 2, fz = az + dz * w.thick / 2;
-    const double len = span - w.thick;
+    // The body runs between the pillar faces at the ends (per-end thickness:
+    // pillars of a different owner's wall_t step at the joint, 5.2 note).
+    const double fx = ax + dx * w.t_end0 / 2, fz = az + dz * w.t_end0 / 2;
+    const double len = span - (w.t_end0 + w.t_end1) / 2;
     if (!(len > kEps)) {
         err = "delve/run [" + u.id + "]: wall span " + std::to_string(span) + " <= thick " +
               std::to_string(w.thick);
@@ -354,8 +356,20 @@ bool expandDoor(const IrDoor& d, int fill_seed, const std::string& asset, Unit& 
     return true;
 }
 
-// v1 lamp placement (rect rooms): centered inset grid over the room bbox,
-// nx = max(1, round(sx / step)) per axis, mount on the ceiling plane.
+// v1 lamp placement: centered inset grid over the room bbox, nx = max(1,
+// round(sx / step)) per axis, mount on the ceiling plane. Positions outside a
+// figured room's contour are skipped (rects: never triggers).
+bool pointInRoomGrid(const IrRoom& r, double cell, double x, double z) {
+    bool inside = false;
+    const size_t n = r.grid.size();
+    for (size_t i = 0, j = n - 1; i < n; j = i++) {
+        const double xi = r.grid[i].first * cell, yi = r.grid[i].second * cell;
+        const double xj = r.grid[j].first * cell, yj = r.grid[j].second * cell;
+        if ((yi > z) != (yj > z) && x < (xj - xi) * (z - yi) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+}
+
 bool expandLamps(const IrRoom& r, double cell, double step, int fill_seed, int& k,
                  const std::string& asset, std::vector<Unit>& units, std::string& err) {
     double x0 = 1e300, x1 = -1e300, z0 = 1e300, z1 = -1e300;
@@ -376,6 +390,9 @@ bool expandLamps(const IrRoom& r, double cell, double step, int fill_seed, int& 
     }
     for (int i = 0; i < nx; ++i)
         for (int j = 0; j < nz; ++j) {
+            const double lx = x0 + (x1 - x0) * (i + 0.5) / nx;
+            const double lz = z0 + (z1 - z0) * (j + 0.5) / nz;
+            if (!pointInRoomGrid(r, cell, lx, lz)) continue;  // notch of a figured room
             Unit u;
             u.id = "deco:lamp:" + std::to_string(k++);
             u.slot = "decor:lamp";
@@ -389,9 +406,9 @@ bool expandLamps(const IrRoom& r, double cell, double step, int fill_seed, int& 
                           {"style", pgg::Value(style)},
                           {"tag", pgg::Value(1)},
                           {"rng_seed", pgg::Value(unit_seed(fill_seed, u.id))}};
-            u.tx = x0 + (x1 - x0) * (i + 0.5) / nx;
+            u.tx = lx;
             u.ty = r.h;
-            u.tz = z0 + (z1 - z0) * (j + 0.5) / nz;
+            u.tz = lz;
             units.push_back(std::move(u));
         }
     return true;
@@ -773,42 +790,46 @@ bool fill_level(const IrV2& ir, const Project& project, const FillOpts& opts, Fi
 
     std::map<std::string, const IrDoor*> doors;
     for (const auto& d : ir.doors) doors[d.id] = &d;
+    // 5.6: v1 projects fill from the split fill seed; the v0 path keeps using
+    // the project seed directly (docs/project_v1.md).
+    const int fseed =
+        project.format == kProjectFormatV1 ? fill_seed_v1(project.seed) : project.seed;
     std::vector<Unit> units;
     for (const auto& r : ir.rooms) {
         Unit u;
-        if (!expandRoom(r, project.fill.cell, project.seed, assets["room_fill"], u, err))
+        if (!expandRoom(r, project.fill.cell, fseed, assets["room_fill"], u, err))
             return false;
         units.push_back(std::move(u));
     }
     for (const auto& w : ir.walls) {
         Unit u;
-        if (!expandBody(w, ir, project.fill.cell, project.seed, assets["wall_body"], doors, u,
+        if (!expandBody(w, ir, project.fill.cell, fseed, assets["wall_body"], doors, u,
                         err))
             return false;
         units.push_back(std::move(u));
     }
     for (const auto& f : ir.facings) {
         Unit u;
-        if (!expandFacing(f, project.fill.row_module, project.seed, assets["facing"], u, err))
+        if (!expandFacing(f, project.fill.row_module, fseed, assets["facing"], u, err))
             return false;
         units.push_back(std::move(u));
     }
     for (const auto& n : ir.nodes) {
         Unit u;
-        if (!expandNode(n, ir, project.fill.cell, project.fill.row_module, project.seed,
+        if (!expandNode(n, ir, project.fill.cell, project.fill.row_module, fseed,
                         assets["node"], u, err))
             return false;
         units.push_back(std::move(u));
     }
     for (const auto& d : ir.doors) {
         Unit u;
-        if (!expandDoor(d, project.seed, assets["door"], u, err)) return false;
+        if (!expandDoor(d, fseed, assets["door"], u, err)) return false;
         units.push_back(std::move(u));
     }
     {
         int k = 0;
         for (const auto& r : ir.rooms)
-            if (!expandLamps(r, project.fill.cell, project.fill.lamp_step, project.seed, k,
+            if (!expandLamps(r, project.fill.cell, project.fill.lamp_step, fseed, k,
                              assets["decor:lamp"], units, err))
                 return false;
     }

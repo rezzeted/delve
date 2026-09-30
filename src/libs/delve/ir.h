@@ -1,7 +1,12 @@
 #pragma once
 
 // Delve IR v2 (F4, docs/ir_v2.md): walls, nodes, doors, room developments and
-// transitions built from a frozen IR (delve-ir/0) + a fill project. No edgar.
+// transitions. Two input paths into one core (D2.3b):
+//   - build_ir_v2: frozen IR (delve-ir/0) + a fill project; v1 restrictions
+//     (rects, 1-cell doors, dtype open, uniform project wall_t) hold.
+//   - build_ir_from_layout: delve-layout/0 + a delve-project/1 (graph roles,
+//     dtype from passage edges, multi-cell doors, figured orthogonal rooms,
+//     per-room wall_t via resolve_room_fill, 5.2 mismatch is an F4 error).
 // v2 = v1 geometry with string room ids (frozen decimal form, D2: graph id).
 
 #include <map>
@@ -36,6 +41,7 @@ struct IrWall {
     std::string room_left, room_right;  // "" = void
     GridPt g0, g1;
     double thick = 0;  // owner's wall_t, meters
+    double t_end0 = 0, t_end1 = 0;  // node (pillar) thickness at g0 / g1 end
     double h_left = 0, h_right = 0;  // room heights; void side repeats owner h
     std::vector<std::string> doors;  // door ids cutting this wall, sorted
 };
@@ -98,11 +104,11 @@ struct IrDoor {
     std::string id;  // door:<a>-<b>, a < b
     std::string room_a, room_b;
     std::string wall;
-    GridPt g0, g1;  // full 1-cell segment, lex-min first
+    GridPt g0, g1;  // full segment (1+ cells), lex-min first
     WorldPt from, to;  // CLEAR opening ends (frame already out), lex-min first
     double clear = 0;  // clear width, meters (door_len * cell - 2 * frame)
     double h = 0, frame = 0, thick = 0;
-    int dtype = 1;  // v1: always open (frozen IR carries no socket ids)
+    int dtype = 1;  // frozen path: always open; layout path: passage door code
 };
 
 struct IrTransition {
@@ -118,7 +124,12 @@ struct IrTransition {
 };
 
 struct IrV2 {
+    // Provenance: frozen path fills frozen_path; layout path sets from_layout
+    // and layout_project/layout_seed (from delve-layout/0 source).
     std::string frozen_path, project_path;
+    bool from_layout = false;
+    std::string layout_project;
+    int layout_seed = 0;
     std::vector<IrRoom> rooms;  // by id
     std::vector<IrWall> walls;  // by id
     std::vector<IrFacing> facings;  // by id
@@ -135,6 +146,16 @@ struct IrV2 {
 bool build_ir_v2(const std::string& frozen_json, const std::string& frozen_path,
                  const Project& project, const std::string& project_path, IrV2& out,
                  std::string& err);
+
+// D2.3b: build from a generated layout (delve-layout/0) + a delve-project/1.
+// Roles/ids come from the graph, dtype from passage edges, per-room wall_t
+// from resolve_room_fill (a shared wall whose sides resolve different
+// thicknesses is an F4 error naming both rooms, 5.2). Figured orthogonal
+// contours and multi-cell doors are accepted. False + err on any mismatch
+// between the layout and the graph (unknown/missing room, role mismatch,
+// door without a passage, unpaired door, self-intersecting contour).
+bool build_ir_from_layout(const LayoutData& layout, const Project& project,
+                          const std::string& project_path, IrV2& out, std::string& err);
 
 // F5 artifact: stable-key JSON (N6). read rejects other formats (N7).
 bool write_ir_v2_json(const IrV2& ir, std::string& text_out, std::string& err);

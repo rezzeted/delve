@@ -14,7 +14,11 @@
 #include "ir.h"
 #include "project.h"
 
+#include "catalog.h"
+#include "generate.h"
+
 #include "pgg/src/eval/geometry.h"
+#include "pgg/src/eval/param_text.h"
 
 namespace {
 
@@ -24,6 +28,25 @@ std::string readFile(const std::string& path) {
     std::ostringstream s;
     s << in.rdbuf();
     return s.str();
+}
+
+// Replace the unique `from` substring; fails the test when absent/ambiguous.
+std::string surgery(const std::string& text, const std::string& from, const std::string& to) {
+    const size_t first = text.find(from);
+    EXPECT_NE(first, std::string::npos) << "anchor missing: " << from;
+    EXPECT_EQ(text.find(from, first + 1), std::string::npos) << "anchor ambiguous: " << from;
+    std::string out = text;
+    out.replace(first, from.size(), to);
+    return out;
+}
+
+bool loadText(const std::string& text, delve::Project& p, std::string& err) {
+    const std::string path =
+        (std::filesystem::path(testing::TempDir()) / "d2_check_probe.json").string();
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out << text;
+    out.close();
+    return delve::load_project(path, p, err);
 }
 
 delve::Project loadD1Project() {
@@ -430,4 +453,117 @@ TEST(DelveCheck, TransitionPaintStoneBrick) {
     }
 }
 
+// D2.3b: the full chain "project -> layout -> IR -> fill -> F11" for a
+// generated level (d2_project: entry -c1- hall; c1-hall passage is a gate).
+// The corridor role's wall_t override is removed: with per-room thickness the
+// corridor's 0.5 vs the others' 0.6 would be a 5.2 error on shared walls.
+delve::Project loadD2ChainProject() {
+    const std::string base = readFile(std::string(DELVE_TEST_DATA) + "/d2_project.json");
+    delve::Project p;
+    std::string err;
+    EXPECT_TRUE(loadText(surgery(base, ", \"wall_t\": 0.5", ""), p, err)) << err;
+    // slots resolve against the committed asset library here.
+    p.dir = std::filesystem::path(DELVE_ASSETS_DIR).parent_path().string();
+    return p;
+}
+
+delve::IrV2 generateIr(delve::Project& p) {
+    delve::layout::Catalog cat;
+    std::string err;
+    EXPECT_TRUE(delve::layout::build_catalog(p, cat, err)) << err;
+    delve::layout::LayoutGenerator gen;
+    delve::layout::LayoutResult lr;
+    delve::layout::GenerateOptions opts;
+    opts.attempts = 4;
+    EXPECT_TRUE(gen.generate(p, cat, opts, lr, err)) << err;
+    std::string ltext;
+    EXPECT_TRUE(delve::layout::write_layout_json(lr, p, "chain", ltext, err)) << err;
+    delve::LayoutData ld;
+    EXPECT_TRUE(delve::read_layout_json(ltext, ld, err)) << err;
+    delve::IrV2 ir;
+    EXPECT_TRUE(delve::build_ir_from_layout(ld, p, "chain", ir, err)) << err;
+    return ir;
+}
+
+TEST(DelveCheck, GenerateRectLevelEndToEnd) {
+    delve::Project p = loadD2ChainProject();
+    const delve::IrV2 ir = generateIr(p);
+    ASSERT_FALSE(ir.rooms.empty());
+    EXPECT_TRUE(ir.from_layout);
+    EXPECT_GT(ir.transitions.size(), 0u);  // corridor sides are brick vs stone
+    // The gate passage reaches the door unit's dtype (asset draws the bars).
+    bool saw_gate = false;
+    for (const auto& d : ir.doors) saw_gate = saw_gate || d.dtype == 2;
+    EXPECT_TRUE(saw_gate);
+    const delve::FillResult fill = fillIr(ir, p);
+    std::vector<delve::CheckDiag> ds;
+    EXPECT_TRUE(delve::check_level(ir, p, fill, ds)) << diagText(ds);
+}
+
+TEST(DelveCheck, GenerateFiguredLevelEndToEnd) {
+    // rooms_rect narrows to entry; the hall must adopt the L-shaped grand_hall.
+    const std::string base = readFile(std::string(DELVE_TEST_DATA) + "/d2_project.json");
+    std::string text = surgery(base, ", \"wall_t\": 0.5", "");
+    text = surgery(text, "\"rooms_rect\": {\"w\": [4, 5], \"h\": [4, 5]}",
+                   "\"rooms_rect\": {\"w\": [4, 5], \"h\": [4, 5], \"roles\": [\"entry\"]}");
+    delve::Project q;
+    std::string err;
+    ASSERT_TRUE(loadText(text, q, err)) << err;
+    q.dir = std::filesystem::path(DELVE_ASSETS_DIR).parent_path().string();
+    // The v1 room_fill asset is rect-only by contract (assets_v1.md); the
+    // figured hall runs the empty test double, everything else is real.
+    q.asset_roots = {"src/tests/data", "assets"};
+    q.slots["room_fill"] = "fill/empty_room_fill.pgg";
+
+    const delve::IrV2 ir = generateIr(q);
+    bool saw_figured = false;
+    for (const auto& r : ir.rooms) saw_figured = saw_figured || r.grid.size() > 4;
+    ASSERT_TRUE(saw_figured) << "the hall must adopt the L-shaped grand_hall";
+    const delve::FillResult fill = fillIr(ir, q);
+    std::vector<delve::CheckDiag> ds;
+    EXPECT_TRUE(delve::check_level(ir, q, fill, ds)) << diagText(ds);
+}
+
 }  // namespace
+
+// Regression probe: the gate door variant must not carry coincident faces
+// (the frozen IR only ever has open doors, so check_level never saw a gate
+// before D2.3b wired passage dtypes through).
+TEST(DelveCheck, GateAssetHasNoDoubleGeometry) {
+    const std::string assets = DELVE_ASSETS_DIR;
+    const std::string dir = assets + "/doors";
+    std::string err;
+    pgg::RunParams rp;
+    rp.importRoots = {assets};
+    for (const auto& [name, text] :
+         std::vector<std::pair<std::string, std::string>>{
+             {"seg", "@opening_v1.seg.points.json"}, {"h", "2.2"}, {"frame", "0.15"},
+             {"thick", "0.6"}, {"dtype", "2"}, {"rng_seed", "7"}}) {
+        pgg::Value v;
+        ASSERT_TRUE(pgg::parseParamText(text, dir, v, &err)) << err;
+        rp.values.emplace_back(name, v);
+    }
+    const pgg::RunResult r = pgg::runFile(dir + "/opening_v1.pgg", rp);
+    ASSERT_FALSE(r.hasErrors());
+    delve::FillResult fill;
+    for (const auto& o : r.outputs)
+        if (o.name == "mesh") fill.mesh = pgg::asGeo(o.value);
+    ASSERT_NE(fill.mesh, nullptr);
+    // The door asset is style-neutral by contract; the F6 merge gives its
+    // points a neutral 0 column (slots §1). Mimic that here.
+    auto styled = std::make_shared<pgg::Geo>(*fill.mesh);
+    auto attrs = std::make_shared<pgg::AttrSet>(
+        fill.mesh->pointAttrs ? *fill.mesh->pointAttrs : pgg::AttrSet{});
+    attrs->columns["style"] = pgg::AttrColumn{
+        std::make_shared<const std::vector<int64_t>>(fill.mesh->pointCount(), 0)};
+    styled->pointAttrs = std::move(attrs);
+    fill.mesh = std::move(styled);
+    delve::FillResult::UnitSpan span;
+    span.id = "door:t";
+    span.slot = "door";
+    span.meshBegin = 0;
+    span.meshEnd = fill.mesh->pointCount();
+    fill.units.push_back(span);
+    std::vector<delve::CheckDiag> ds;
+    EXPECT_TRUE(delve::check_elements(fill, ds)) << diagText(ds);
+}

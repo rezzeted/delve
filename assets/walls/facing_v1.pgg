@@ -3,6 +3,9 @@
 # rule: mixed footprints are skipped, the mortar core shows through), door
 # openings clipped afterwards (opening stones ARE cut, §5.3). Per-element
 # @style (points) + @Cd. rng: bond direction + per-element tint jitter.
+# Elements protrude to local -Z: with the seg along the CW contour walk, local
+# +Z points away from the room, so the dressing sits proud INTO the room
+# (поправка D2.3b; mirrors node faces, which protrude along +n).
 
 import codes as c
 import patterns as z
@@ -58,7 +61,7 @@ coursed = repeat (empty_mesh(), iterations = rows * cols) |acc| {
     code = z.elem_zone(own = style, x0 = x0, x1 = x1, y0 = y0, y1 = y1, zones = zones)
     keep = fits & (code >= 0)
     eb = box(size = vec3(elem_len, module, finish_d), res = 1)
-    em = transform(eb, translate = vec3((x0 + x1) * 0.5, (y0 + y1) * 0.5, finish_d * 0.5))
+    em = transform(eb, translate = vec3((x0 + x1) * 0.5, (y0 + y1) * 0.5, 0.0 - finish_d * 0.5))
     ei = set(em, "id", e, domain = points)
     es = set(ei, "style", code, domain = points)
     ec = set(es, "Cd", c.style_color(style = code), domain = points)

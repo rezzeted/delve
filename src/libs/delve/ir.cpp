@@ -46,6 +46,26 @@ std::string fmt_num(double v) {
 GridPt lex_min(GridPt a, GridPt b) { return b < a ? b : a; }
 GridPt lex_max(GridPt a, GridPt b) { return b < a ? a : b; }
 
+GridPt unit_dir(GridPt d) {
+    return {(d.first > 0) - (d.first < 0), (d.second > 0) - (d.second < 0)};
+}
+
+// Even-odd containment. Probes used here sit at half-integer coordinates and
+// never land on an edge: an edge crossing the probe would be an atom closing
+// the very direction being probed (all edges have integer coordinates).
+bool point_in_poly(const std::vector<GridPt>& c, double x, double y) {
+    bool inside = false;
+    const size_t n = c.size();
+    for (size_t i = 0, j = n - 1; i < n; j = i++) {
+        const double xi = c[i].first, yi = c[i].second;
+        const double xj = c[j].first, yj = c[j].second;
+        if ((yi > y) != (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+}
+
+// --- frozen IR input (delve-ir/0): rects, 1-cell doors, paired --------------
+
 struct FrozenDoor {
     int to = -1;
     GridPt d0, d1;  // lex-min first
@@ -56,7 +76,6 @@ struct FrozenRoom {
     bool corridor = false;
     std::vector<GridPt> grid;  // normalized: area2 < 0
     std::vector<FrozenDoor> doors;
-    int x0 = 0, x1 = 0, y0 = 0, y1 = 0;  // rect bounds (v1: rects only)
 };
 
 bool get_grid_pt(const nlohmann::json& j, GridPt& out) {
@@ -115,7 +134,7 @@ bool parse_frozen(const std::string& text, const std::string& path, std::vector<
             r.grid.push_back(p);
         }
         if (r.grid.size() != 4) {
-            err = path + ": " + where + ": figured rooms land at D2 (v1 wants rects, got " +
+            err = path + ": " + where + ": figured rooms land on the layout path (D2.3b; got " +
                   std::to_string(r.grid.size()) + " vertices)";
             return false;
         }
@@ -135,14 +154,6 @@ bool parse_frozen(const std::string& text, const std::string& path, std::vector<
             return false;
         }
         if (area2(r.grid) > 0) std::reverse(r.grid.begin(), r.grid.end());  // §5.1: Delve normalizes
-        r.x0 = r.x1 = r.grid[0].first;
-        r.y0 = r.y1 = r.grid[0].second;
-        for (const auto& p : r.grid) {
-            r.x0 = std::min(r.x0, p.first);
-            r.x1 = std::max(r.x1, p.first);
-            r.y0 = std::min(r.y0, p.second);
-            r.y1 = std::max(r.y1, p.second);
-        }
         if (jr.contains("doors")) {
             if (!jr["doors"].is_array()) {
                 err = path + ": " + where + ": doors: expected an array";
@@ -169,8 +180,8 @@ bool parse_frozen(const std::string& text, const std::string& path, std::vector<
                     return false;
                 }
                 if (len != 1) {
-                    err = path + ": " + where + ": multi-cell doors land at D2 (got length " +
-                          std::to_string(len) + ")";
+                    err = path + ": " + where + ": multi-cell doors land on the layout path " +
+                          "(D2.3b; got length " + std::to_string(len) + ")";
                     return false;
                 }
                 // On the room contour: colinear with a contour edge, within its span.
@@ -223,13 +234,101 @@ bool parse_frozen(const std::string& text, const std::string& path, std::vector<
     return true;
 }
 
-// Contour edge of a rect room: axis line (vert, coord), span [t0, t1], t0 < t1.
+// --- general contour check (layout path; F1 validates project-side already) --
+
+// Closed intersection of two axis-aligned segments (touch counts).
+bool ortho_segs_touch(GridPt a, GridPt b, GridPt c, GridPt d) {
+    const bool ab_vert = a.first == b.first;
+    const bool cd_vert = c.first == d.first;
+    if (ab_vert && cd_vert) {
+        if (a.first != c.first) return false;
+        const int lo = std::max(std::min(a.second, b.second), std::min(c.second, d.second));
+        const int hi = std::min(std::max(a.second, b.second), std::max(c.second, d.second));
+        return lo <= hi;
+    }
+    if (!ab_vert && !cd_vert) {
+        if (a.second != c.second) return false;
+        const int lo = std::max(std::min(a.first, b.first), std::min(c.first, d.first));
+        const int hi = std::min(std::max(a.first, b.first), std::max(c.first, d.first));
+        return lo <= hi;
+    }
+    const GridPt v = ab_vert ? a : c, v2 = ab_vert ? b : d;
+    const GridPt h = ab_vert ? c : a, h2 = ab_vert ? d : b;
+    const int x = v.first, y = h.second;
+    return x >= std::min(h.first, h2.first) && x <= std::max(h.first, h2.first) &&
+           y >= std::min(v.second, v2.second) && y <= std::max(v.second, v2.second);
+}
+
+bool check_contour(const std::vector<GridPt>& c, const std::string& where,
+                   const std::string& path, std::string& err) {
+    if (c.size() < 4) {
+        err = path + ": " + where + ": expected >= 4 contour points";
+        return false;
+    }
+    const size_t n = c.size();
+    for (size_t i = 0; i < n; ++i) {
+        const GridPt a = c[i], b = c[(i + 1) % n], d = c[(i + 2) % n];
+        if (a == b) {
+            err = path + ": " + where + ": zero-length edge at point " + std::to_string(i);
+            return false;
+        }
+        if (a.first != b.first && a.second != b.second) {
+            err = path + ": " + where + ": edge " + std::to_string(i) + " is not axis-aligned";
+            return false;
+        }
+        if ((a.first == b.first && b.first == d.first) ||
+            (a.second == b.second && b.second == d.second)) {
+            err = path + ": " + where + ": redundant vertex at point " +
+                  std::to_string((i + 1) % n) + " (three collinear consecutive points)";
+            return false;
+        }
+    }
+    if (std::set<GridPt>(c.begin(), c.end()).size() != n) {
+        err = path + ": " + where + ": duplicate points";
+        return false;
+    }
+    if (area2(c) == 0) {
+        err = path + ": " + where + ": zero area";
+        return false;
+    }
+    for (size_t i = 0; i < n; ++i)
+        for (size_t j = i + 1; j < n; ++j) {
+            if (j == i + 1 || (i == 0 && j == n - 1)) continue;  // adjacent edges
+            if (ortho_segs_touch(c[i], c[(i + 1) % n], c[j], c[(j + 1) % n])) {
+                err = path + ": " + where + ": self-intersection at edges " + std::to_string(i) +
+                      " and " + std::to_string(j);
+                return false;
+            }
+        }
+    return true;
+}
+
+// --- unified core input -----------------------------------------------------
+
+struct DoorInput {
+    std::string to;
+    GridPt d0, d1;  // lex-min first
+    int dtype = 1;  // DR_* code (frozen path: open)
+};
+
+struct RoomInput {
+    std::string id;
+    bool corridor = false;
+    std::string role;
+    std::vector<GridPt> grid;  // normalized (area2 < 0), any orthogonal simple polygon
+    std::vector<DoorInput> doors;
+    double h = 0, wall_t = 0;  // resolved fill (4.2)
+    std::string style, floor_style, ceil_style;
+};
+
+// Contour edge of a room: axis line (vert, coord), span [t0, t1], t0 < t1.
 struct Edge {
     std::string room;
     int index = -1;  // contour edge index (leaves vertex `index`)
     bool vert = false;
     int coord = 0;
     int t0 = 0, t1 = 0;
+    bool room_on_neg = false;  // interior on the -x (vert) / -y (horiz) side
 };
 
 struct Atom {
@@ -258,56 +357,69 @@ int zone_seed(int zone_id) {
     return static_cast<int>(fnv1a_32("transition/" + std::to_string(zone_id)) & 0x7fffffff);
 }
 
-bool build_ir_v2(const std::string& frozen_json, const std::string& frozen_path,
-                 const Project& project, const std::string& project_path, IrV2& out,
-                 std::string& err) {
+namespace {
+
+bool strictly_inside_edge(const RoomInput& fr, GridPt v) {
+    for (size_t i = 0; i < fr.grid.size(); ++i) {
+        const GridPt p = fr.grid[i], q = fr.grid[(i + 1) % fr.grid.size()];
+        if (p.first == q.first && v.first == p.first &&
+            std::min(p.second, q.second) < v.second && v.second < std::max(p.second, q.second))
+            return true;
+        if (p.second == q.second && v.second == p.second &&
+            std::min(p.first, q.first) < v.first && v.first < std::max(p.first, q.first))
+            return true;
+    }
+    return false;
+}
+
+// Shared F4 core (frozen and layout paths): atoms, walls, nodes, doors,
+// developments, transitions, derived values. Inputs are sorted by room id.
+bool build_core(const Project& project, const std::vector<RoomInput>& frooms,
+                const std::string& err_path, IrV2& ir, std::string& err) {
     const double cell = project.fill.cell;
-    const double thick = project.fill.wall_t;
-    auto sid = [](int id) { return std::to_string(id); };  // frozen id -> v2 string id
 
-    // --- 1. frozen rooms ---
-    std::vector<FrozenRoom> frooms;
-    if (!parse_frozen(frozen_json, frozen_path, frooms, err)) return false;
-    std::map<std::string, size_t> room_idx;  // v2 id -> frooms/ir.rooms index (same order)
-    for (size_t i = 0; i < frooms.size(); ++i) room_idx[sid(frooms[i].id)] = i;
+    std::map<std::string, size_t> room_idx;  // id -> frooms/ir.rooms index (same order)
+    for (size_t i = 0; i < frooms.size(); ++i) room_idx[frooms[i].id] = i;
+    auto room_of = [&](const std::string& id) -> const RoomInput& { return frooms[room_idx[id]]; };
 
-    IrV2 ir;
-    ir.frozen_path = frozen_path;
-    ir.project_path = project_path;
-
-    // --- 2. rooms + roles ---
+    // --- 2. rooms ---
     for (const auto& fr : frooms) {
         IrRoom r;
-        r.id = sid(fr.id);
+        r.id = fr.id;
         r.corridor = fr.corridor;
-        r.role = room_role(fr.corridor);
+        r.role = fr.role;
         r.grid = fr.grid;
-        const RoleEntry e = resolve_role(project, r.role);
-        r.h = e.h;
-        r.style = e.style;
-        r.floor_style = e.floor;
-        r.ceil_style = e.ceil;
+        r.h = fr.h;
+        r.style = fr.style;
+        r.floor_style = fr.floor_style;
+        r.ceil_style = fr.ceil_style;
         ir.rooms.push_back(std::move(r));
     }
 
     // --- 3. atomize (§5.2 T-rule: every vertex on an edge splits it) ---
+    // Interior side is taken from the walk direction (CW contour: interior on
+    // the right), so any orthogonal simple polygon works, not just rects.
     std::map<LineKey, std::vector<Edge>> lines;
     for (const auto& fr : frooms) {
         for (size_t i = 0; i < fr.grid.size(); ++i) {
             const GridPt p = fr.grid[i], q = fr.grid[(i + 1) % fr.grid.size()];
             Edge e;
-            e.room = sid(fr.id);
+            e.room = fr.id;
             e.index = static_cast<int>(i);
             if (p.first == q.first) {
                 e.vert = true;
                 e.coord = p.first;
                 e.t0 = std::min(p.second, q.second);
                 e.t1 = std::max(p.second, q.second);
+                // Walked down (-y): right of the walk is -x (neg); up: +x (pos).
+                e.room_on_neg = q.second < p.second;
             } else {
                 e.vert = false;
                 e.coord = p.second;
                 e.t0 = std::min(p.first, q.first);
                 e.t1 = std::max(p.first, q.first);
+                // Walked +x: right of the walk is -y (neg); -x: +y (pos).
+                e.room_on_neg = q.first > p.first;
             }
             lines[{e.vert, e.coord}].push_back(e);
         }
@@ -325,33 +437,12 @@ bool build_ir_v2(const std::string& frozen_json, const std::string& frozen_path,
             std::set<std::string> neg, pos;
             for (const auto& e : edges) {
                 if (!(e.t0 <= t0 && t1 <= e.t1)) continue;
-                const FrozenRoom& fr = frooms[room_idx[e.room]];
-                if (key.vert) {
-                    if (fr.x1 == key.coord)
-                        neg.insert(e.room);
-                    else if (fr.x0 == key.coord)
-                        pos.insert(e.room);
-                    else {
-                        err = frozen_path + ": internal: room " + e.room +
-                              " not adjacent to its edge";
-                        return false;
-                    }
-                } else {
-                    if (fr.y1 == key.coord)
-                        neg.insert(e.room);
-                    else if (fr.y0 == key.coord)
-                        pos.insert(e.room);
-                    else {
-                        err = frozen_path + ": internal: room " + e.room +
-                              " not adjacent to its edge";
-                        return false;
-                    }
-                }
+                (e.room_on_neg ? neg : pos).insert(e.room);
             }
             if (neg.size() > 1 || pos.size() > 1) {
-                err = frozen_path + ": rooms overlap on " + std::string(key.vert ? "x=" : "y=") +
-                      std::to_string(key.coord) + " [" + std::to_string(t0) + "," + std::to_string(t1) +
-                      "]";
+                err = err_path + ": rooms overlap on " + std::string(key.vert ? "x=" : "y=") +
+                      std::to_string(key.coord) + " [" + std::to_string(t0) + "," +
+                      std::to_string(t1) + "]";
                 return false;
             }
             Atom a;
@@ -382,13 +473,16 @@ bool build_ir_v2(const std::string& frozen_json, const std::string& frozen_path,
                std::to_string(g1.first) + "," + std::to_string(g1.second);
     };
 
+    // --- walls (§5.2: one body per atom, owner = min room id, thickness from
+    // the owner; a shared wall whose sides resolve different thicknesses is an
+    // F4 error naming both rooms) ---
     std::map<std::string, size_t> wall_idx;
     for (const auto& a : atoms) {
         const auto [g0, g1] = atom_ends(a);
         IrWall w;
         w.id = wall_id_of(g0, g1);
         if (wall_idx.count(w.id)) {
-            err = frozen_path + ": internal: duplicate wall " + w.id;
+            err = err_path + ": internal: duplicate wall " + w.id;
             return false;
         }
         // Rooms left/right of the g0 -> g1 axis (grid math view, x right, y up).
@@ -401,14 +495,24 @@ bool build_ir_v2(const std::string& frozen_json, const std::string& frozen_path,
         }
         w.outer = w.room_left.empty() != w.room_right.empty();
         if (w.room_left.empty() && w.room_right.empty()) {
-            err = frozen_path + ": internal: wall " + w.id + " has no rooms";
+            err = err_path + ": internal: wall " + w.id + " has no rooms";
             return false;
         }
         w.owner = w.outer ? (w.room_left.empty() ? w.room_right : w.room_left)
                           : std::min(w.room_left, w.room_right);
+        if (!w.outer) {
+            const double tl = room_of(w.room_left).wall_t, tr = room_of(w.room_right).wall_t;
+            if (!(tl == tr)) {
+                err = err_path + ": rooms " + w.room_left + " and " + w.room_right +
+                      " resolve different wall thicknesses (" + fmt_num(tl) + " vs " +
+                      fmt_num(tr) + ") for their shared wall " + w.id +
+                      " [5.2; align wall_t on both roles/templates/rooms]";
+                return false;
+            }
+        }
         w.g0 = g0;
         w.g1 = g1;
-        w.thick = thick;
+        w.thick = room_of(w.owner).wall_t;
         const double h_owner = ir.rooms[room_idx[w.owner]].h;
         w.h_left = w.room_left.empty() ? h_owner : ir.rooms[room_idx[w.room_left]].h;
         w.h_right = w.room_right.empty() ? h_owner : ir.rooms[room_idx[w.room_right]].h;
@@ -416,92 +520,8 @@ bool build_ir_v2(const std::string& frozen_json, const std::string& frozen_path,
         ir.walls.push_back(std::move(w));
     }
 
-    // --- 4. doors -> walls + 5.4 structural checks ---
-    std::set<std::tuple<std::string, std::string, GridPt, GridPt>> door_pairs;
-    for (const auto& fr : frooms)
-        for (const auto& d : fr.doors)
-            door_pairs.insert(
-                {std::min(sid(fr.id), sid(d.to)), std::max(sid(fr.id), sid(d.to)), d.d0, d.d1});
-    for (const auto& [ra, rb, dd0, dd1] : door_pairs) {
-        const bool vert = dd0.first == dd1.first;
-        const int coord = vert ? dd0.first : dd0.second;
-        const int td0 = vert ? dd0.second : dd0.first;
-        const int td1 = vert ? dd1.second : dd1.first;
-        // Crossing check: a split strictly inside the door span.
-        const auto lit = lines.find({vert, coord});
-        if (lit == lines.end()) {
-            err = frozen_path + ": internal: door of rooms " + ra + "-" + rb + " is on no line";
-            return false;
-        }
-        for (const auto& e : lit->second) {
-            if ((td0 < e.t0 && e.t0 < td1) || (td0 < e.t1 && e.t1 < td1)) {
-                err = frozen_path + ": door " + fmt_pt(dd0) + "-" + fmt_pt(dd1) + " of rooms " + ra +
-                      "-" + rb + " crosses a T-junction (vertices split walls, doors cannot span them)";
-                return false;
-            }
-        }
-        // Owning atom: the unique atom covering the door span.
-        const Atom* owner_atom = nullptr;
-        for (const auto& a : atoms) {
-            if (a.vert != vert || a.coord != coord) continue;
-            if (a.t0 <= td0 && td1 <= a.t1) owner_atom = &a;
-        }
-        if (!owner_atom) {
-            err = frozen_path + ": door " + fmt_pt(dd0) + "-" + fmt_pt(dd1) + " of rooms " + ra +
-                  "-" + rb + " lies on no wall";
-            return false;
-        }
-        const auto [g0, g1] = atom_ends(*owner_atom);
-        const std::string wid = wall_id_of(g0, g1);
-        IrWall& wall = ir.walls[wall_idx[wid]];
-        const std::string wa = std::min(wall.room_left, wall.room_right);
-        const std::string wb = std::max(wall.room_left, wall.room_right);
-        if (wall.outer || wa != ra || wb != rb) {
-            err = frozen_path + ": door " + fmt_pt(dd0) + "-" + fmt_pt(dd1) + " of rooms " + ra +
-                  "-" + rb + " is not on their shared wall (" + wid + ")";
-            return false;
-        }
-        IrDoor door;
-        door.id = "door:" + ra + "-" + rb;
-        door.room_a = ra;
-        door.room_b = rb;
-        door.wall = wid;
-        door.g0 = dd0;
-        door.g1 = dd1;
-        door.h = project.fill.door_h;
-        door.frame = project.fill.frame;
-        door.thick = wall.thick;
-        door.clear = 1.0 * cell - 2.0 * door.frame;  // v1: 1-cell doors (§5.3)
-        if (!(door.clear > 0.0)) {
-            err = frozen_path + ": door " + door.id + ": clear opening " + fmt_num(door.clear) +
-                  "m <= 0 (door_len * cell - 2 * frame; widen cell or narrow frame)";
-            return false;
-        }
-        // 5.4: door offset from the corner (cells * cell >= thick/2 + frame).
-        const double off_cells = std::min(td0 - owner_atom->t0, owner_atom->t1 - td1);
-        if (off_cells * cell < thick / 2.0 + door.frame - kEps) {
-            err = frozen_path + ": door " + door.id + ": offset from the corner " +
-                  fmt_num(off_cells * cell) + "m < thick/2 + frame (" + fmt_num(thick / 2.0) + " + " +
-                  fmt_num(door.frame) + ") [5.4]";
-            return false;
-        }
-        // Clear ends: full segment inset by frame (meters), lex-min first.
-        const double ux = vert ? 0.0 : 1.0, uy = vert ? 1.0 : 0.0;
-        door.from = {dd0.first * cell + ux * door.frame, dd0.second * cell + uy * door.frame};
-        door.to = {dd1.first * cell - ux * door.frame, dd1.second * cell - uy * door.frame};
-        wall.doors.push_back(door.id);
-        ir.doors.push_back(std::move(door));
-    }
-    for (auto& w : ir.walls) std::sort(w.doors.begin(), w.doors.end());
-
-    auto door_by_id = [&](const std::string& id) -> const IrDoor& {
-        for (const auto& d : ir.doors)
-            if (d.id == id) return d;
-        static IrDoor empty;
-        return empty;  // unreachable (ids come from walls)
-    };
-
-    // --- 5. nodes + open faces ---
+    // --- 5. nodes + open faces (§5.2; ahead of doors: the 5.4 offset check
+    // needs pillar thicknesses) ---
     std::set<GridPt> vertices;
     for (const auto& a : atoms) {
         const auto [g0, g1] = atom_ends(a);
@@ -519,7 +539,7 @@ bool build_ir_v2(const std::string& frozen_json, const std::string& frozen_path,
             if (g0 == v || g1 == v) incident.push_back(&a);
         }
         if (incident.size() < 2) {
-            err = frozen_path + ": internal: vertex " + fmt_pt(v) + " has " +
+            err = err_path + ": internal: vertex " + fmt_pt(v) + " has " +
                   std::to_string(incident.size()) + " walls";
             return false;
         }
@@ -532,7 +552,7 @@ bool build_ir_v2(const std::string& frozen_json, const std::string& frozen_path,
         node.id = "node:" + std::to_string(v.first) + "," + std::to_string(v.second);
         node.owner = *adj.begin();
         node.at = v;
-        node.thick = thick;
+        node.thick = room_of(node.owner).wall_t;
         node.h_pillar = 0;
         for (const auto& r : adj) node.h_pillar = std::max(node.h_pillar, ir.rooms[room_idx[r]].h);
         for (const GridPt n : kDirs) {
@@ -546,33 +566,29 @@ bool build_ir_v2(const std::string& frozen_json, const std::string& frozen_path,
                     closed = true;
             }
             if (closed) continue;
-            // Open face: the room strictly beyond it (void if none).
-            std::vector<std::string> beyond;
-            for (const auto& r : adj) {
-                const FrozenRoom& fr = frooms[room_idx[r]];
-                if (n.first == 1 && fr.x0 == v.first && fr.y0 < v.second && v.second < fr.y1)
-                    beyond.push_back(r);
-                if (n.first == -1 && fr.x1 == v.first && fr.y0 < v.second && v.second < fr.y1)
-                    beyond.push_back(r);
-                if (n.second == 1 && fr.y0 == v.second && fr.x0 < v.first && v.first < fr.x1)
-                    beyond.push_back(r);
-                if (n.second == -1 && fr.y1 == v.second && fr.x0 < v.first && v.first < fr.x1)
-                    beyond.push_back(r);
-            }
-            if (beyond.size() > 1) {
-                err = frozen_path + ": rooms overlap past vertex " + fmt_pt(v);
-                return false;
+            // Open face: the room it looks into, probed half a cell past the
+            // face plane (works for figured rooms; on rect layouts this
+            // provably coincides with the incident-room test).
+            const double px = v.first + 0.5 * n.first, py = v.second + 0.5 * n.second;
+            std::string beyond;
+            for (const auto& fr : frooms) {
+                if (!point_in_poly(fr.grid, px, py)) continue;
+                if (!beyond.empty()) {
+                    err = err_path + ": rooms overlap past vertex " + fmt_pt(v);
+                    return false;
+                }
+                beyond = fr.id;
             }
             IrNodeFace f;
-            f.center = {n.first * thick / 2.0, n.second * thick / 2.0};
+            f.center = {n.first * node.thick / 2.0, n.second * node.thick / 2.0};
             f.n = {static_cast<double>(n.first), static_cast<double>(n.second)};
-            f.room = beyond.empty() ? "" : beyond[0];
+            f.room = beyond;
             if (f.room.empty()) {
                 f.h = ir.rooms[room_idx[node.owner]].h;
-                f.style = resolve_role(project, ir.rooms[room_idx[node.owner]].role).style;
+                f.style = ir.rooms[room_idx[node.owner]].style;
             } else {
                 f.h = ir.rooms[room_idx[f.room]].h;
-                f.style = ir.rooms[room_idx[f.room]].style;  // T-faces refined at step 7
+                f.style = ir.rooms[room_idx[f.room]].style;  // joint pass refines T/concave faces
             }
             node.faces.push_back(std::move(f));
         }
@@ -593,17 +609,110 @@ bool build_ir_v2(const std::string& frozen_json, const std::string& frozen_path,
         }
     }
 
-    auto strictly_inside_edge = [&](const FrozenRoom& fr, GridPt v) {
-        for (size_t i = 0; i < fr.grid.size(); ++i) {
-            const GridPt p = fr.grid[i], q = fr.grid[(i + 1) % fr.grid.size()];
-            if (p.first == q.first && v.first == p.first &&
-                std::min(p.second, q.second) < v.second && v.second < std::max(p.second, q.second))
-                return true;
-            if (p.second == q.second && v.second == p.second &&
-                std::min(p.first, q.first) < v.first && v.first < std::max(p.first, q.first))
-                return true;
+    // Wall bodies run between pillar faces: per-end pillar thickness (equal to
+    // the wall's own under uniform wall_t; differs only at point contacts,
+    // which the 5.2 working rule tolerates).
+    for (auto& w : ir.walls) {
+        w.t_end0 = ir.nodes[node_idx[w.g0]].thick;
+        w.t_end1 = ir.nodes[node_idx[w.g1]].thick;
+    }
+
+    // --- 4. doors -> walls + 5.4 structural checks ---
+    std::set<std::tuple<std::string, std::string, GridPt, GridPt>> door_pairs;
+    for (const auto& fr : frooms)
+        for (const auto& d : fr.doors)
+            door_pairs.insert(
+                {std::min(fr.id, d.to), std::max(fr.id, d.to), d.d0, d.d1});
+    for (const auto& [ra, rb, dd0, dd1] : door_pairs) {
+        const bool vert = dd0.first == dd1.first;
+        const int coord = vert ? dd0.first : dd0.second;
+        const int td0 = vert ? dd0.second : dd0.first;
+        const int td1 = vert ? dd1.second : dd1.first;
+        // Crossing check: a split strictly inside the door span.
+        const auto lit = lines.find({vert, coord});
+        if (lit == lines.end()) {
+            err = err_path + ": internal: door of rooms " + ra + "-" + rb + " is on no line";
+            return false;
         }
-        return false;
+        for (const auto& e : lit->second) {
+            if ((td0 < e.t0 && e.t0 < td1) || (td0 < e.t1 && e.t1 < td1)) {
+                err = err_path + ": door " + fmt_pt(dd0) + "-" + fmt_pt(dd1) + " of rooms " + ra +
+                      "-" + rb + " crosses a T-junction (vertices split walls, doors cannot span them)";
+                return false;
+            }
+        }
+        // Owning atom: the unique atom covering the door span.
+        const Atom* owner_atom = nullptr;
+        for (const auto& a : atoms) {
+            if (a.vert != vert || a.coord != coord) continue;
+            if (a.t0 <= td0 && td1 <= a.t1) owner_atom = &a;
+        }
+        if (!owner_atom) {
+            err = err_path + ": door " + fmt_pt(dd0) + "-" + fmt_pt(dd1) + " of rooms " + ra +
+                  "-" + rb + " lies on no wall";
+            return false;
+        }
+        const auto [g0, g1] = atom_ends(*owner_atom);
+        const std::string wid = wall_id_of(g0, g1);
+        IrWall& wall = ir.walls[wall_idx[wid]];
+        const std::string wa = std::min(wall.room_left, wall.room_right);
+        const std::string wb = std::max(wall.room_left, wall.room_right);
+        if (wall.outer || wa != ra || wb != rb) {
+            err = err_path + ": door " + fmt_pt(dd0) + "-" + fmt_pt(dd1) + " of rooms " + ra +
+                  "-" + rb + " is not on their shared wall (" + wid + ")";
+            return false;
+        }
+        int dtype = 1;
+        for (const auto& fr : frooms)
+            for (const auto& d : fr.doors)
+                if (std::min(fr.id, d.to) == ra && std::max(fr.id, d.to) == rb && d.d0 == dd0 &&
+                    d.d1 == dd1) {
+                    dtype = d.dtype;
+                    break;
+                }
+        IrDoor door;
+        door.id = "door:" + ra + "-" + rb;
+        door.room_a = ra;
+        door.room_b = rb;
+        door.wall = wid;
+        door.g0 = dd0;
+        door.g1 = dd1;
+        door.h = project.fill.door_h;
+        door.frame = project.fill.frame;
+        door.thick = wall.thick;
+        door.dtype = dtype;
+        const int len_cells = std::abs(dd1.first - dd0.first) + std::abs(dd1.second - dd0.second);
+        door.clear = len_cells * cell - 2.0 * door.frame;  // §5.3
+        if (!(door.clear > 0.0)) {
+            err = err_path + ": door " + door.id + ": clear opening " + fmt_num(door.clear) +
+                  "m <= 0 (door_len * cell - 2 * frame; widen cell or narrow frame)";
+            return false;
+        }
+        // 5.4: door offset from the corner (cells * cell >= pillar/2 + frame;
+        // the pillar at an atom end may be thicker than the wall itself).
+        const double t0n = ir.nodes[node_idx[g0]].thick, t1n = ir.nodes[node_idx[g1]].thick;
+        const double pillar = std::max({wall.thick, t0n, t1n});
+        const double off_cells = std::min(td0 - owner_atom->t0, owner_atom->t1 - td1);
+        if (off_cells * cell < pillar / 2.0 + door.frame - kEps) {
+            err = err_path + ": door " + door.id + ": offset from the corner " +
+                  fmt_num(off_cells * cell) + "m < thick/2 + frame (" + fmt_num(pillar / 2.0) +
+                  " + " + fmt_num(door.frame) + ") [5.4]";
+            return false;
+        }
+        // Clear ends: full segment inset by frame (meters), lex-min first.
+        const double ux = vert ? 0.0 : 1.0, uy = vert ? 1.0 : 0.0;
+        door.from = {dd0.first * cell + ux * door.frame, dd0.second * cell + uy * door.frame};
+        door.to = {dd1.first * cell - ux * door.frame, dd1.second * cell - uy * door.frame};
+        wall.doors.push_back(door.id);
+        ir.doors.push_back(std::move(door));
+    }
+    for (auto& w : ir.walls) std::sort(w.doors.begin(), w.doors.end());
+
+    auto door_by_id = [&](const std::string& id) -> const IrDoor& {
+        for (const auto& d : ir.doors)
+            if (d.id == id) return d;
+        static IrDoor empty;
+        return empty;  // unreachable (ids come from walls)
     };
 
     // --- 6+7. developments + transitions ---
@@ -617,13 +726,19 @@ bool build_ir_v2(const std::string& frozen_json, const std::string& frozen_path,
         GridPt sdir;  // T-face only: through-edge walk direction (grid)
         GridPt t_vertex;
         GridPt t_normal;  // outward normal of the T-face (into the room)
+        // Concave (270°) contour corner: two open pillar faces look into the
+        // room itself. v1 emits no zones here: both flanks always resolve to
+        // one style (any room sharing one vertex-adjacent notch atom provably
+        // shares the other, so side rules cannot tell the flanks apart).
+        bool concave = false;
+        GridPt c_normal_in, c_normal_out;  // right(d_in), right(d_out)
     };
     std::vector<Joint> joints;
 
     for (const auto& fr : frooms) {
-        const IrRoom& room = ir.rooms[room_idx[sid(fr.id)]];
-        const double cx = (fr.x0 + fr.x1) * 0.5 * cell, cz = (fr.y0 + fr.y1) * 0.5 * cell;
-        // s-coordinate of each contour vertex (walk order).
+        const IrRoom& room = ir.rooms[room_idx[fr.id]];
+        // s-coordinate of each contour vertex (walk order; start fixed by the
+        // contour itself, so transition ids do not float across style edits).
         std::vector<double> s_vert(fr.grid.size() + 1, 0);
         for (size_t i = 0; i < fr.grid.size(); ++i) {
             const GridPt p = fr.grid[i], q = fr.grid[(i + 1) % fr.grid.size()];
@@ -652,45 +767,54 @@ bool build_ir_v2(const std::string& frozen_json, const std::string& frozen_path,
             });
             for (size_t k = 0; k < edge_atoms.size(); ++k) {
                 const Atom& a = *edge_atoms[k];
-                const bool room_on_neg =
-                    (a.vert && ((fr.x1 == a.coord))) || (!a.vert && ((fr.y1 == a.coord)));
+                // CW contour: interior on the right of the walk.
+                const bool room_on_neg = vert ? (w < 0) : (w > 0);
                 const std::string other = room_on_neg ? a.room_pos : a.room_neg;
                 const bool outer = other.empty();
                 const auto [g0, g1] = atom_ends(a);
                 const std::string wid = wall_id_of(g0, g1);
+                const IrWall& wall = ir.walls[wall_idx[wid]];
                 IrFacing f;
-                f.id = "fac:" + sid(fr.id) + ":" + std::to_string(i);
+                f.id = "fac:" + fr.id + ":" + std::to_string(i);
                 if (edge_atoms.size() > 1) f.id += "." + std::to_string(k);
                 f.wall = wid;
-                f.room = sid(fr.id);
-                const std::string adj_role =
-                    outer ? "" : ir.rooms[room_idx[other]].role;
-                f.style = resolve_side_style(project, room.role, outer, adj_role);
-                // Walk-frame geometry: walk start/end (grid), outward = left of walk.
+                f.room = fr.id;
+                const std::string adj_role = outer ? "" : room_of(other).role;
+                // 4.2 side level over the resolved room base style.
+                f.style = apply_side_rules(project, fr.style, outer, adj_role);
+                // Walk-frame geometry: walk start/end (grid). The side normal
+                // points INTO the room (slots §2.3 "наружная нормаль стороны":
+                // outward from the wall body) = right of the CW walk.
                 const int ws_t = (w > 0) ? a.t0 : a.t1;  // walk-start axis coord
                 const int we_t = (w > 0) ? a.t1 : a.t0;
                 const GridPt ws = vert ? GridPt{a.coord, ws_t} : GridPt{ws_t, a.coord};
                 const GridPt we = vert ? GridPt{a.coord, we_t} : GridPt{we_t, a.coord};
                 const double wdx = vert ? 0.0 : w, wdy = vert ? w : 0.0;
-                const double nx = -wdy, ny = wdx;  // left of walk (grid math view)
+                const double nx = wdy, ny = -wdx;  // right of walk (grid math view)
+                // Margins are halves of the pillars at the atom's ends; the
+                // face plane is offset by the wall's own half-thickness toward
+                // the room (the body face the room's interior sees).
+                const double t_ws = ir.nodes[node_idx[ws]].thick;
+                const double t_we = ir.nodes[node_idx[we]].thick;
                 const double s_a0 = s_vert[i] + std::abs(ws_t - (vert ? p.second : p.first)) * cell;
-                f.s0 = s_a0 + thick / 2.0;
-                f.s1 = s_a0 + (a.t1 - a.t0) * cell - thick / 2.0;
-                f.from = {(ws.first * cell + wdx * thick / 2.0) + nx * thick / 2.0,
-                          (ws.second * cell + wdy * thick / 2.0) + ny * thick / 2.0};
-                f.to = {(we.first * cell - wdx * thick / 2.0) + nx * thick / 2.0,
-                        (we.second * cell - wdy * thick / 2.0) + ny * thick / 2.0};
+                f.s0 = s_a0 + t_ws / 2.0;
+                f.s1 = s_a0 + (a.t1 - a.t0) * cell - t_we / 2.0;
+                f.from = {(ws.first * cell + wdx * t_ws / 2.0) + nx * wall.thick / 2.0,
+                          (ws.second * cell + wdy * t_ws / 2.0) + ny * wall.thick / 2.0};
+                f.to = {(we.first * cell - wdx * t_we / 2.0) + nx * wall.thick / 2.0,
+                        (we.second * cell - wdy * t_we / 2.0) + ny * wall.thick / 2.0};
                 f.n = {nx, ny};
                 f.h = room.h;
-                // Defensive: outward must point away from the room center.
-                const double mx = (f.from.first + f.to.first) * 0.5 - cx;
-                const double mz = (f.from.second + f.to.second) * 0.5 - cz;
-                if (mx * nx + mz * ny <= 0) {
-                    err = frozen_path + ": internal: facing " + f.id + " normal points inward";
+                // Defensive: the facing normal must probe into the room
+                // (exact for figured rooms, where the bbox center can lie
+                // outside).
+                const double mx = (f.from.first + f.to.first) * 0.5 / cell + nx * 0.25;
+                const double mz = (f.from.second + f.to.second) * 0.5 / cell + ny * 0.25;
+                if (!point_in_poly(fr.grid, mx, mz)) {
+                    err = err_path + ": internal: facing " + f.id + " normal points outward";
                     return false;
                 }
                 // Cuts: full door segments on this wall, walk order.
-                const IrWall& wall = ir.walls[wall_idx[wid]];
                 struct DoorS {
                     double s0 = 0, s1 = 0;
                     const IrDoor* d = nullptr;
@@ -729,7 +853,7 @@ bool build_ir_v2(const std::string& frozen_json, const std::string& frozen_path,
             const IrFacing& f_in = ir.facings[fi_in];
             const IrFacing& f_out = ir.facings[fi_out];
             Joint jt;
-            jt.room = sid(fr.id);
+            jt.room = fr.id;
             jt.period = s_vert[fr.grid.size()];
             jt.facing_in = fi_in;
             jt.facing_out = fi_out;
@@ -753,10 +877,20 @@ bool build_ir_v2(const std::string& frozen_json, const std::string& frozen_path,
                     shared = w_in.g1;
                 jt.t_vertex = shared;
                 jt.s = (f_in.s1 + f_out.s0) * 0.5;  // T-face center
-                // T-face normal: from the node into this room.
-                const GridPt n = vert ? GridPt{(fr.x0 + fr.x1) / 2 > shared.first ? 1 : -1, 0}
-                                      : GridPt{0, (fr.y0 + fr.y1) / 2 > shared.second ? 1 : -1};
-                jt.t_normal = n;
+                // T-face normal: from the node into this room, probed.
+                const GridPt cand[2] = {vert ? GridPt{1, 0} : GridPt{0, 1},
+                                        vert ? GridPt{-1, 0} : GridPt{0, -1}};
+                GridPt tn{0, 0};
+                for (const GridPt cn : cand) {
+                    if (point_in_poly(fr.grid, shared.first + 0.5 * cn.first,
+                                      shared.second + 0.5 * cn.second))
+                        tn = cn;
+                }
+                if (tn == GridPt{0, 0}) {
+                    err = err_path + ": internal: T-face normal unresolved at " + fmt_pt(shared);
+                    return false;
+                }
+                jt.t_normal = tn;
                 // Through-edge walk direction (== +s at the joint).
                 const int w = vert ? ((q.second > p.second) ? 1 : -1) : ((q.first > p.first) ? 1 : -1);
                 jt.sdir = vert ? GridPt{0, w} : GridPt{w, 0};
@@ -767,34 +901,73 @@ bool build_ir_v2(const std::string& frozen_json, const std::string& frozen_path,
                 jt.s = s_vert[corner > 0 ? static_cast<size_t>(corner) : fr.grid.size()];
                 if (corner == 0) jt.s = s_vert[fr.grid.size()];
                 jt.has_tface = false;
+                // 270° corner = left turn on the CW walk.
+                const GridPt vv = fr.grid[corner];
+                const GridPt pp = fr.grid[walk[j].edge];
+                const GridPt nn = fr.grid[(corner + 1) % fr.grid.size()];
+                const GridPt d_in = unit_dir({vv.first - pp.first, vv.second - pp.second});
+                const GridPt d_out = unit_dir({nn.first - vv.first, nn.second - vv.second});
+                const long long cross = static_cast<long long>(d_in.first) * d_out.second -
+                                        static_cast<long long>(d_in.second) * d_out.first;
+                if (cross > 0) {
+                    jt.concave = true;
+                    jt.t_vertex = vv;
+                    jt.c_normal_in = {d_in.second, -d_in.first};   // right of d_in
+                    jt.c_normal_out = {d_out.second, -d_out.first};
+                }
             }
             joints.push_back(jt);
         }
         // T-face styles + s-intervals are set when transitions are built (below);
-        // plain T-faces (no transition) keep the room style from step 5, fixed here
-        // to the incoming facing style for consistency.
+        // plain T-faces (no transition) keep the room style from the node pass,
+        // fixed here to the incoming facing style for consistency. Concave
+        // corner faces take their flanks' styles (equal in v1, see Joint).
         for (const Joint& jt : joints) {
-            if (jt.room != sid(fr.id) || !jt.has_tface) continue;
-            const std::string nid =
-                "node:" + std::to_string(jt.t_vertex.first) + "," + std::to_string(jt.t_vertex.second);
-            const auto fit = face_idx.find({nid, jt.t_normal});
-            if (fit == face_idx.end()) {
-                err = frozen_path + ": internal: T-face missing at " + fmt_pt(jt.t_vertex);
-                return false;
+            if (jt.room != fr.id) continue;
+            if (jt.has_tface) {
+                const std::string nid =
+                    "node:" + std::to_string(jt.t_vertex.first) + "," + std::to_string(jt.t_vertex.second);
+                const auto fit = face_idx.find({nid, jt.t_normal});
+                if (fit == face_idx.end()) {
+                    err = err_path + ": internal: T-face missing at " + fmt_pt(jt.t_vertex);
+                    return false;
+                }
+                IrNode& node = ir.nodes[node_idx[jt.t_vertex]];
+                IrNodeFace& face = node.faces[fit->second];
+                if (face.room != fr.id) {
+                    err = err_path + ": internal: T-face at " + fmt_pt(jt.t_vertex) +
+                          " looks into room " + face.room;
+                    return false;
+                }
+                if (!strictly_inside_edge(fr, jt.t_vertex)) {
+                    err = err_path + ": internal: vertex " + fmt_pt(jt.t_vertex) +
+                          " not inside room " + fr.id + " edge";
+                    return false;
+                }
+                face.style = ir.facings[jt.facing_in].style;  // A; transitions refine below
+            } else if (jt.concave) {
+                const std::string nid =
+                    "node:" + std::to_string(jt.t_vertex.first) + "," + std::to_string(jt.t_vertex.second);
+                IrNode& node = ir.nodes[node_idx[jt.t_vertex]];
+                const std::pair<GridPt, std::string> refinements[2] = {
+                    {jt.c_normal_in, ir.facings[jt.facing_in].style},
+                    {jt.c_normal_out, ir.facings[jt.facing_out].style}};
+                for (const auto& [nrm, style] : refinements) {
+                    const auto fit = face_idx.find({nid, nrm});
+                    if (fit == face_idx.end()) {
+                        err = err_path + ": internal: concave face missing at " +
+                              fmt_pt(jt.t_vertex);
+                        return false;
+                    }
+                    IrNodeFace& face = node.faces[fit->second];
+                    if (face.room != fr.id) {
+                        err = err_path + ": internal: concave face at " + fmt_pt(jt.t_vertex) +
+                              " looks into room " + face.room;
+                        return false;
+                    }
+                    face.style = style;
+                }
             }
-            IrNode& node = ir.nodes[node_idx[jt.t_vertex]];
-            IrNodeFace& face = node.faces[fit->second];
-            if (face.room != sid(fr.id)) {
-                err = frozen_path + ": internal: T-face at " + fmt_pt(jt.t_vertex) +
-                      " looks into room " + face.room;
-                return false;
-            }
-            if (!strictly_inside_edge(fr, jt.t_vertex)) {
-                err = frozen_path + ": internal: vertex " + fmt_pt(jt.t_vertex) + " not inside room " +
-                      sid(fr.id) + " edge";
-                return false;
-            }
-            face.style = ir.facings[jt.facing_in].style;  // A; transitions refine below
         }
     }
 
@@ -804,7 +977,7 @@ bool build_ir_v2(const std::string& frozen_json, const std::string& frozen_path,
     bool pat_ok = false;
     const int zone_pattern = pattern_code(project.fill.transitions.pattern, pat_ok);
     if (zone_w <= 0) {
-        err = project_path + ": fill.transitions.width must be > 0";
+        err = err_path + ": fill.transitions.width must be > 0";
         return false;
     }
     for (const Joint& jt : joints) {
@@ -812,7 +985,7 @@ bool build_ir_v2(const std::string& frozen_json, const std::string& frozen_path,
         const IrFacing& f_out = ir.facings[jt.facing_out];
         const std::string& style_a = f_in.style;
         const std::string& style_b = f_out.style;
-        if (style_a == style_b) continue;
+        if (style_a == style_b) continue;  // concave joints: always equal in v1
         IrTransition t;
         t.id = static_cast<int>(ir.transitions.size());
         t.room = jt.room;
@@ -822,7 +995,7 @@ bool build_ir_v2(const std::string& frozen_json, const std::string& frozen_path,
         const int code_a = style_code(style_a, sa_ok);
         const int code_b = style_code(style_b, sb_ok);
         if (!sa_ok || !sb_ok) {
-            err = frozen_path + ": internal: unresolvable zone styles " + style_a + "|" + style_b;
+            err = err_path + ": internal: unresolvable zone styles " + style_a + "|" + style_b;
             return false;
         }
         t.pattern = zone_pattern;
@@ -875,7 +1048,10 @@ bool build_ir_v2(const std::string& frozen_json, const std::string& frozen_path,
         };
         if (zone_place == "corner") {
             std::vector<Run> base = {{f_in.s0, f_in.s1}};
-            if (jt.has_tface) base.push_back({jt.s - thick / 2.0, jt.s + thick / 2.0});
+            if (jt.has_tface) {
+                const double tv = ir.nodes[node_idx[jt.t_vertex]].thick;
+                base.push_back({jt.s - tv / 2.0, jt.s + tv / 2.0});
+            }
             // Wrap joint: the development is circular; unwrap the outgoing side.
             const double shift = jt.wraps ? jt.period : 0.0;
             base.push_back({f_out.s0 + shift, f_out.s1 + shift});
@@ -910,8 +1086,9 @@ bool build_ir_v2(const std::string& frozen_json, const std::string& frozen_path,
         auto emit = [&](size_t fi, double l_origin, bool is_face, size_t node_i, size_t face_i,
                         double shift, int flip) {
             const IrFacing& f = ir.facings[fi];
-            const double lo = is_face ? jt.s - thick / 2.0 : f.s0 + shift;
-            const double hi = is_face ? jt.s + thick / 2.0 : f.s1 + shift;
+            const double tv = is_face ? ir.nodes[node_idx[jt.t_vertex]].thick : 0.0;
+            const double lo = is_face ? jt.s - tv / 2.0 : f.s0 + shift;
+            const double hi = is_face ? jt.s + tv / 2.0 : f.s1 + shift;
             for (const auto& r : kept) {
                 const double c0 = std::max(r.r0, lo), c1 = std::min(r.r1, hi);
                 if (c1 - c0 <= kEps) continue;
@@ -979,11 +1156,37 @@ bool build_ir_v2(const std::string& frozen_json, const std::string& frozen_path,
         for (auto& f : n.faces) std::sort(f.zones.begin(), f.zones.end(), by_l);
 
     // --- 8. derived (§4.3): corridor clear widths (minima enforced at F11) ---
+    // Min gap between opposite-facing atoms of the corridor room (the
+    // narrowest arm for figured rooms; exactly the min side for rects).
+    // Conservative across open notches: a U-shaped corridor reports the notch
+    // gap as well.
     for (const auto& fr : frooms) {
         if (!fr.corridor) continue;
-        const double w = (fr.x1 - fr.x0) * cell - thick;
-        const double h = (fr.y1 - fr.y0) * cell - thick;
-        ir.corridor_clear[sid(fr.id)] = std::min(w, h);
+        double best = -1;
+        for (const auto& a : atoms) {
+            const bool a_neg = a.room_neg == fr.id, a_pos = a.room_pos == fr.id;
+            if (!a_neg && !a_pos) continue;
+            for (const auto& b : atoms) {
+                if (b.vert != a.vert || b.coord == a.coord) continue;
+                const bool b_neg = b.room_neg == fr.id, b_pos = b.room_pos == fr.id;
+                if (!((a_neg && b_pos) || (a_pos && b_neg))) continue;
+                const int lo = std::max(a.t0, b.t0), hi = std::min(a.t1, b.t1);
+                if (hi <= lo) continue;
+                const double gap = std::abs(a.coord - b.coord) * cell;
+                if (best < 0 || gap < best) best = gap;
+            }
+        }
+        if (best < 0) {  // degenerate (no opposite pair): bbox fallback
+            int x0 = fr.grid[0].first, x1 = x0, y0 = fr.grid[0].second, y1 = y0;
+            for (const auto& p : fr.grid) {
+                x0 = std::min(x0, p.first);
+                x1 = std::max(x1, p.first);
+                y0 = std::min(y0, p.second);
+                y1 = std::max(y1, p.second);
+            }
+            best = std::min(x1 - x0, y1 - y0) * cell;
+        }
+        ir.corridor_clear[fr.id] = best - fr.wall_t;
     }
 
     // --- 9. stable order (N6) ---
@@ -997,9 +1200,194 @@ bool build_ir_v2(const std::string& frozen_json, const std::string& frozen_path,
     std::sort(ir.doors.begin(), ir.doors.end(),
               [](const IrDoor& a, const IrDoor& b) { return a.id < b.id; });
     // transitions already in id order; warnings already deterministic.
+    return true;
+}
+
+}  // namespace
+
+// --- public builders ---------------------------------------------------------
+
+bool build_ir_v2(const std::string& frozen_json, const std::string& frozen_path,
+                 const Project& project, const std::string& project_path, IrV2& out,
+                 std::string& err) {
+    std::vector<FrozenRoom> frooms;
+    if (!parse_frozen(frozen_json, frozen_path, frooms, err)) return false;
+
+    std::vector<RoomInput> inputs;
+    for (const auto& fr : frooms) {
+        RoomInput in;
+        in.id = std::to_string(fr.id);  // frozen decimal form
+        in.corridor = fr.corridor;
+        in.role = room_role(fr.corridor);  // v0 mapping (corridor | hall)
+        in.grid = fr.grid;
+        // v0 hierarchy: project -> role (4.2); uniform project wall_t.
+        const RoleEntry e = resolve_role(project, in.role);
+        in.h = e.h;
+        in.style = e.style;
+        in.floor_style = e.floor;
+        in.ceil_style = e.ceil;
+        in.wall_t = project.fill.wall_t;
+        for (const auto& d : fr.doors)
+            in.doors.push_back({std::to_string(d.to), d.d0, d.d1, 1});  // always open (§9.1)
+        inputs.push_back(std::move(in));
+    }
+
+    IrV2 ir;
+    ir.frozen_path = frozen_path;
+    ir.project_path = project_path;
+    if (!build_core(project, inputs, frozen_path, ir, err)) return false;
     out = std::move(ir);
     return true;
 }
+
+bool build_ir_from_layout(const LayoutData& layout, const Project& project,
+                          const std::string& project_path, IrV2& out, std::string& err) {
+    const std::string path = project_path;
+    if (!project.layout) {
+        err = path + ": project has no layout tier (needs delve-project/1)";
+        return false;
+    }
+    const LayoutParams& lp = *project.layout;
+    std::map<std::string, const GraphRoom*> graph;
+    for (const auto& r : lp.rooms) graph[r.id] = &r;
+    std::map<std::pair<std::string, std::string>, int> passage_dtype;  // unordered pair -> DR_*
+    for (const auto& p : lp.passages) {
+        bool ok = false;
+        const int code = door_code(p.door, ok);
+        if (!ok) {
+            err = path + ": unknown door type \"" + p.door + "\" (F1 missed it)";
+            return false;
+        }
+        passage_dtype[{std::min(p.a, p.b), std::max(p.a, p.b)}] = code;
+    }
+    std::map<std::string, const TemplateDecl*> templates;
+    for (const auto& t : lp.templates) templates[t.name] = &t;
+
+    // The layout must place exactly the graph rooms (F3 validity covers this
+    // for generated layouts; this guards hand-written delve-layout/0 files).
+    std::set<std::string> seen;
+    for (const auto& lr : layout.rooms) {
+        if (!graph.count(lr.id)) {
+            err = path + ": layout room \"" + lr.id + "\" is not in the project graph";
+            return false;
+        }
+        seen.insert(lr.id);
+    }
+    for (const auto& r : lp.rooms)
+        if (!seen.count(r.id)) {
+            err = path + ": graph room \"" + r.id + "\" is missing from the layout";
+            return false;
+        }
+
+    std::vector<RoomInput> inputs;
+    for (const auto& lr : layout.rooms) {
+        const GraphRoom& gr = *graph[lr.id];
+        if (lr.role != gr.role) {
+            err = path + ": layout room \"" + lr.id + "\": role \"" + lr.role +
+                  "\" does not match the graph role \"" + gr.role + "\"";
+            return false;
+        }
+        const bool corridor = gr.role == "corridor";
+        if (lr.corridor != corridor) {
+            err = path + ": layout room \"" + lr.id + "\": corridor flag does not match the role \"" +
+                  gr.role + "\"";
+            return false;
+        }
+        RoomInput in;
+        in.id = lr.id;
+        in.corridor = lr.corridor;
+        in.role = gr.role;
+        in.grid = lr.grid;
+        if (!check_contour(in.grid, "layout room \"" + lr.id + "\" grid", path, err)) return false;
+        if (area2(in.grid) > 0) std::reverse(in.grid.begin(), in.grid.end());  // §5.1
+        // 4.2: room -> template -> role -> project. Parametric templates carry
+        // no override; unknown template names are treated as parametric.
+        const FillOverride* tov = nullptr;
+        if (const auto it = templates.find(lr.tmpl); it != templates.end())
+            tov = &it->second->fill;
+        const FillOverride* rov = gr.fill.empty() ? nullptr : &gr.fill;
+        const ResolvedFill rf = resolve_room_fill(project, gr.role, tov, rov);
+        in.h = rf.h;
+        in.wall_t = rf.wall_t;
+        in.style = rf.style;
+        in.floor_style = rf.floor;
+        in.ceil_style = rf.ceil;
+        for (const auto& d : lr.doors) {
+            if (!graph.count(d.to)) {
+                err = path + ": layout room \"" + lr.id + "\": door to \"" + d.to +
+                      "\" is not in the project graph";
+                return false;
+            }
+            const auto dit =
+                passage_dtype.find({std::min(lr.id, d.to), std::max(lr.id, d.to)});
+            if (dit == passage_dtype.end()) {
+                err = path + ": layout room \"" + lr.id + "\": door to \"" + d.to +
+                      "\" has no passage in the graph";
+                return false;
+            }
+            GridPt p = d.g0, q = d.g1;
+            if (q < p) std::swap(p, q);
+            if (p.first != q.first && p.second != q.second) {
+                err = path + ": layout room \"" + lr.id + "\": door is not axis-aligned";
+                return false;
+            }
+            const int len = std::abs(q.first - p.first) + std::abs(q.second - p.second);
+            if (len < 1) {
+                err = path + ": layout room \"" + lr.id + "\": zero-length door";
+                return false;
+            }
+            // On the room contour: colinear with a contour edge, within its span.
+            bool on_edge = false;
+            for (size_t i = 0; i < in.grid.size(); ++i) {
+                const GridPt a = in.grid[i], b = in.grid[(i + 1) % in.grid.size()];
+                if (a.first == b.first && p.first == q.first && p.first == a.first) {
+                    const int lo = std::min(a.second, b.second), hi = std::max(a.second, b.second);
+                    if (lo <= p.second && q.second <= hi) on_edge = true;
+                }
+                if (a.second == b.second && p.second == q.second && p.second == a.second) {
+                    const int lo = std::min(a.first, b.first), hi = std::max(a.first, b.first);
+                    if (lo <= p.first && q.first <= hi) on_edge = true;
+                }
+            }
+            if (!on_edge) {
+                err = path + ": layout room \"" + lr.id + "\": door " + fmt_pt(p) + "-" + fmt_pt(q) +
+                      " is not on the room contour";
+                return false;
+            }
+            in.doors.push_back({d.to, p, q, dit->second});
+        }
+        inputs.push_back(std::move(in));
+    }
+    // Door pairing: A -> B must be listed back by B -> A with the same segment.
+    {
+        std::map<std::string, const RoomInput*> by_id;
+        for (const auto& r : inputs) by_id[r.id] = &r;
+        for (const auto& r : inputs) {
+            for (const auto& d : r.doors) {
+                bool back = false;
+                for (const auto& e : by_id[d.to]->doors)
+                    if (e.to == r.id && e.d0 == d.d0 && e.d1 == d.d1) back = true;
+                if (!back) {
+                    err = path + ": layout room \"" + r.id + "\": door " + fmt_pt(d.d0) + "-" +
+                          fmt_pt(d.d1) + " to room \"" + d.to +
+                          "\" has no matching entry in room \"" + d.to + "\"";
+                    return false;
+                }
+            }
+        }
+    }
+
+    IrV2 ir;
+    ir.from_layout = true;
+    ir.layout_project = layout.source_project;
+    ir.layout_seed = layout.source_seed;
+    ir.project_path = project_path;
+    if (!build_core(project, inputs, path, ir, err)) return false;
+    out = std::move(ir);
+    return true;
+}
+
+// --- F5 artifact -------------------------------------------------------------
 
 bool write_ir_v2_json(const IrV2& ir, std::string& text_out, std::string& err) {
     (void)err;
@@ -1008,7 +1396,11 @@ bool write_ir_v2_json(const IrV2& ir, std::string& text_out, std::string& err) {
     };
     nlohmann::ordered_json doc;
     doc["format"] = kIrFormat;
-    doc["source"] = {{"frozen", ir.frozen_path}, {"project", ir.project_path}};
+    if (ir.from_layout)
+        doc["source"] = {{"layout", {{"project", ir.layout_project}, {"seed", ir.layout_seed}}},
+                         {"project", ir.project_path}};
+    else
+        doc["source"] = {{"frozen", ir.frozen_path}, {"project", ir.project_path}};
     nlohmann::ordered_json jrooms = nlohmann::ordered_json::array();
     for (const auto& r : ir.rooms) {
         nlohmann::ordered_json jgrid = nlohmann::ordered_json::array();
@@ -1033,6 +1425,7 @@ bool write_ir_v2_json(const IrV2& ir, std::string& text_out, std::string& err) {
                           {"rooms", {j_room(w.room_left), j_room(w.room_right)}},
                           {"axis", {{w.g0.first, w.g0.second}, {w.g1.first, w.g1.second}}},
                           {"thick", w.thick},
+                          {"thick_ends", {w.t_end0, w.t_end1}},
                           {"h", {w.h_left, w.h_right}},
                           {"doors", std::move(jdoors)}});
     }
@@ -1190,8 +1583,18 @@ bool read_ir_v2_json(const std::string& text, IrV2& out, std::string& err) {
     }
     try {
         IrV2 ir;
-        ir.frozen_path = doc.at("source").at("frozen").get<std::string>();
-        ir.project_path = doc.at("source").at("project").get<std::string>();
+        const auto& src = doc.at("source");
+        if (src.contains("frozen")) {
+            ir.frozen_path = src.at("frozen").get<std::string>();
+            ir.from_layout = false;
+        } else if (src.contains("layout")) {
+            ir.from_layout = true;
+            ir.layout_project = src.at("layout").at("project").get<std::string>();
+            ir.layout_seed = src.at("layout").at("seed").get<int>();
+        } else {
+            throw std::runtime_error("source: expected {frozen, project} or {layout, project}");
+        }
+        ir.project_path = src.at("project").get<std::string>();
         for (const auto& jr : doc.at("rooms")) {
             IrRoom r;
             r.id = jr.at("id").get<std::string>();
@@ -1222,6 +1625,12 @@ bool read_ir_v2_json(const std::string& text, IrV2& out, std::string& err) {
             w.g0 = a;
             w.g1 = b;
             w.thick = jw.at("thick").get<double>();
+            if (jw.contains("thick_ends")) {
+                w.t_end0 = jw.at("thick_ends").at(0).get<double>();
+                w.t_end1 = jw.at("thick_ends").at(1).get<double>();
+            } else {
+                w.t_end0 = w.t_end1 = w.thick;  // pre-D2.3b files: uniform thickness
+            }
             w.h_left = jw.at("h").at(0).get<double>();
             w.h_right = jw.at("h").at(1).get<double>();
             for (const auto& jd : jw.at("doors")) w.doors.push_back(jd.get<std::string>());
