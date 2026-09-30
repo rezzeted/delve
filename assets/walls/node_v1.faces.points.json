@@ -1,1 +1,1 @@
-{"format": "pgg-points/1", "positions": [[0.3, 0, 0], [0, 0, 0.3]], "attrs": {"n": {"type": "vec3", "values": [[1, 0, 0], [0, 0, 1]]}, "h": {"type": "f32", "values": [3.0, 3.0]}, "style": {"type": "int", "values": [1, 1]}}}
+{"format": "pgg-points/1", "positions": [[0.3, 0, 0], [0, 0, 0.3]], "attrs": {"n": {"type": "vec3", "values": [[1, 0, 0], [0, 0, 1]]}, "h": {"type": "f32", "values": [3.0, 3.0]}, "style": {"type": "int", "values": [1, 1]}, "face": {"type": "int", "values": [0, 1]}}}

@@ -60,3 +60,38 @@ def elem_zone(own: int, x0: f32, x1: f32, y0: f32, y1: f32, zones: geo<points>) 
         ca = covers ? (agree ? s00 : 0 - 1) : ca
     }
 }
+
+def elem_zone_face(own: int, x0: f32, x1: f32, y0: f32, y1: f32, zones: geo<points>, face: int) -> (code: int) {
+    """elem_zone for node faces (slots §2.4): only pieces with @face == face
+    apply (faces share one cloud but have independent local axes)."""
+    expect count(zones) % 2 == 0: "elem_zone_face: zone pieces come in point pairs"
+    code = repeat (own, iterations = count(zones) / 2) |cb| {
+        k = @iteration
+        pc = delete(zones, where = @index != 2 * k)
+        pd = delete(zones, where = @index != 2 * k + 1)
+        mine = value(@face, on = pc) == face
+        lc = dot(value(@P, on = pc), (1, 0, 0))
+        ld = dot(value(@P, on = pd), (1, 0, 0))
+        hits = (x0 <= ld) & (x1 >= lc) & mine
+        fc_pat = value(@pattern, on = pc)
+        fc_sd = value(@seed, on = pc)
+        fc_t0 = value(@t_at_l0, on = pc)
+        fc_fl = value(@flip, on = pc)
+        fc_wd = value(@width, on = pc)
+        fc_md = value(@module, on = pc)
+        fc_sa = value(@style_a, on = pc)
+        fc_sb = value(@style_b, on = pc)
+        qx0 = x0 + 0.0001
+        qx1 = x1 - 0.0001
+        qy0 = y0 + 0.0001
+        qy1 = y1 - 0.0001
+        ux0 = fc_fl == 0 ? fc_t0 + qx0 : fc_t0 - qx0
+        ux1 = fc_fl == 0 ? fc_t0 + qx1 : fc_t0 - qx1
+        r00 = zone_side(pattern = fc_pat, t = ux0, y = qy0, seed = fc_sd, width = fc_wd, module = fc_md, own = own, sa = fc_sa, sb = fc_sb)
+        r10 = zone_side(pattern = fc_pat, t = ux1, y = qy0, seed = fc_sd, width = fc_wd, module = fc_md, own = own, sa = fc_sa, sb = fc_sb)
+        r01 = zone_side(pattern = fc_pat, t = ux0, y = qy1, seed = fc_sd, width = fc_wd, module = fc_md, own = own, sa = fc_sa, sb = fc_sb)
+        r11 = zone_side(pattern = fc_pat, t = ux1, y = qy1, seed = fc_sd, width = fc_wd, module = fc_md, own = own, sa = fc_sa, sb = fc_sb)
+        ok_all = (r00 == r10) & (r00 == r01) & (r00 == r11)
+        cb = hits ? (ok_all ? r00 : 0 - 1) : cb
+    }
+}

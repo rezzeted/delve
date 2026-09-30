@@ -26,7 +26,7 @@ pillar_bare = transform(box(size = vec3(thick, h_pillar, thick), res = 1), trans
 pillar_s = set(pillar_bare, "style", style, domain = points)
 pillar = set(pillar_s, "Cd", c.style_color_mortar(style = style), domain = points)
 
-def face_rows(center: vec3, normal: vec3, face_h: f32, face_style: int, p_thick: f32, p_hpillar: f32, p_module: f32, p_zones: geo<points>) -> (out: geo<mesh>) {
+def face_rows(center: vec3, normal: vec3, face_h: f32, face_style: int, p_thick: f32, p_hpillar: f32, p_module: f32, p_zones: geo<points>, p_face: int) -> (out: geo<mesh>) {
     """Course rows of one open face (local: face plane through center, out = normal).
     Local +x = right of the normal (slots §2.4); the IR flip covers +s parity."""
     tx = dot(normal, (0, 0, 1))
@@ -43,7 +43,7 @@ def face_rows(center: vec3, normal: vec3, face_h: f32, face_style: int, p_thick:
         y1 = y0 + p_module
         x0 = side == 0 ? 0.0 - half : 0.0
         x1 = side == 0 ? 0.0 : half
-        code = z.elem_zone(own = face_style, x0 = x0, x1 = x1, y0 = y0, y1 = y1, zones = p_zones)
+        code = z.elem_zone_face(own = face_style, x0 = x0, x1 = x1, y0 = y0, y1 = y1, zones = p_zones, face = p_face)
         eb = box(size = vec3(half, p_module, finish_d), res = 1)
         em = transform(eb, translate = vec3((x0 + x1) * 0.5, (y0 + y1) * 0.5, finish_d * 0.5))
         es = set(em, "style", code, domain = points)
@@ -55,7 +55,7 @@ def face_rows(center: vec3, normal: vec3, face_h: f32, face_style: int, p_thick:
 }
 
 dressed = foreach f in faces {
-    f = face_rows(center = value(@P, on = f), normal = value(@n, on = f), face_h = value(@h, on = f), face_style = value(@style, on = f), p_thick = thick, p_hpillar = h_pillar, p_module = module, p_zones = zones)
+    f = face_rows(center = value(@P, on = f), normal = value(@n, on = f), face_h = value(@h, on = f), face_style = value(@style, on = f), p_thick = thick, p_hpillar = h_pillar, p_module = module, p_zones = zones, p_face = value(@face, on = f))
 }
 
 mesh = set(merge(pillar, dressed), "Cd", @Cd * (0.96 + random(0.0, 0.08, rng = jit_rng)), domain = points)
