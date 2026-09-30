@@ -5,6 +5,10 @@
 #include <string>
 #include <vector>
 
+#include "pgg/eval.h"
+#include "ir.h"
+#include "project.h"
+
 namespace delve {
 
 // One R-A3 finding. code is "delve/slot" for contract violations or the PGG
@@ -24,5 +28,30 @@ struct SlotDiag {
 bool check_asset(const std::string& slot, const std::string& asset_path,
                  const std::vector<std::string>& import_roots,
                  std::vector<SlotDiag>& diags);
+
+// F6: expand the IR into units (slots §1 ids), run each unit's asset in its
+// local frame (R-A9) and assemble the world-frame level: meshes merged,
+// anchors merged with a per-point @label "<unit_id>#<kind>" (kind =
+// light|spawn|poi). Deterministic: units sorted, merge in order.
+// opts.delve_assets is the delve asset library dir (codes/patterns + v1
+// assets); project asset_roots come first (R-A5). Returns false + err
+// (delve/slot or delve/run, F10 style) on any failure.
+struct FillStats {
+    size_t rooms = 0, bodies = 0, facings = 0, nodes = 0, doors = 0, lamps = 0;
+};
+
+struct FillResult {
+    pgg::GeoPtr mesh;
+    pgg::GeoPtr anchors;
+    FillStats stats;
+};
+
+struct FillOpts {
+    std::string delve_assets;
+    unsigned threads = 0;  // 0 = PGG default (hardware)
+};
+
+bool fill_level(const IrV1& ir, const Project& project, const FillOpts& opts,
+                FillResult& out, std::string& err);
 
 }  // namespace delve

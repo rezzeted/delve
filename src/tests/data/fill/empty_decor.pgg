@@ -1,0 +1,14 @@
+def slot_version() -> (out: int) {
+    out = 1
+}
+
+param p: geo<points>
+param style: int = 1
+param tag: int = 1
+param rng_seed: int = 7
+
+mesh = empty_mesh()
+anchors = empty_points()
+
+output mesh
+output anchors

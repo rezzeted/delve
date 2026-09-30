@@ -31,6 +31,7 @@ add_executable(delve_fill_test delve_fill_test.cpp)
 target_link_libraries(delve_fill_test PRIVATE GTest::gtest_main delve_fill nlohmann_json::nlohmann_json)
 target_compile_definitions(delve_fill_test PRIVATE
     DELVE_TEST_DATA="${CMAKE_SOURCE_DIR}/src/tests/data"
+    DELVE_D0_DIR="${CMAKE_SOURCE_DIR}/docs/d0"
     DELVE_ASSETS_DIR="${CMAKE_SOURCE_DIR}/assets")
 target_compile_features(delve_fill_test PRIVATE cxx_std_20)
 set_property(TARGET delve_fill_test PROPERTY FOLDER tests)

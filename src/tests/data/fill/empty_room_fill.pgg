@@ -1,0 +1,16 @@
+def slot_version() -> (out: int) {
+    out = 1
+}
+
+param contour: geo<points>
+param h: f32 = 3.0
+param role: int = 1
+param style_floor: int = 1
+param style_ceil: int = 3
+param rng_seed: int = 7
+
+mesh = empty_mesh()
+anchors = empty_points()
+
+output mesh
+output anchors
