@@ -1,0 +1,94 @@
+# Delve slot asset: facing v1 (slots §2.3). Course rows of whole elements
+# (running bond, element 2x module), zone pieces via elem_zone (whole-element
+# rule: mixed footprints are skipped, the mortar core shows through), door
+# openings clipped afterwards (opening stones ARE cut, §5.3). Per-element
+# @style (points) + @Cd. rng: bond direction + per-element tint jitter.
+
+import codes as c
+import patterns as z
+
+def slot_version() -> (out: int) {
+    out = 1
+}
+
+param seg: geo<points>
+param n: vec3 = (0.0, 0.0, 1.0)
+param h: f32 = 3.0
+param style: int = 1
+param module: f32 = 0.25
+param cuts: geo<points>
+param zones: geo<points>
+param rng_seed: int = 7
+
+
+p0 = value(@P, on = delete(seg, where = @index != 0))
+p1 = value(@P, on = delete(seg, where = @index != 1))
+dir = p1 - p0
+L = length(dir)
+u = dir / L
+dx = dot(u, (1, 0, 0))
+dz = dot(u, (0, 0, 1))
+# v1: placement derives from seg; n (outward normal) is contract input checked
+# by F6 (D1.3), the asset does not read it.
+yaw = degrees(atan2(0.0 - dz, dx))
+base = vec3(dot(p0, (1, 0, 0)), 0.0, dot(p0, (0, 0, 1)))
+
+root = rng_from_seed(rng_seed)
+bond_rng = split_rng(root, key = "bond")
+jit_rng = split_rng(root, key = "jitter")
+go_left = value(random_int(2, rng = bond_rng), on = mesh_line(count = 1, length = 0.0))
+
+rows = int(floor(h / module))
+elem_len = module * 2.0
+finish_d = 0.05
+cols = int(floor(L / elem_len)) + 1
+
+coursed = repeat (empty_mesh(), iterations = rows * cols) |acc| {
+    e = @iteration
+    r = e / cols
+    cc = e % cols
+    y0 = f32(r) * module
+    y1 = y0 + module
+    odd = r % 2 == 1
+    sh0 = odd ? elem_len * 0.5 : 0.0
+    sh = go_left == 1 ? 0.0 - sh0 : sh0
+    x0 = f32(cc) * elem_len + sh
+    x1 = x0 + elem_len
+    fits = (x0 >= 0.0 - 0.001) & (x1 <= L + 0.001)
+    code = style
+    keep = fits & (code >= 0)
+    eb = box(size = vec3(elem_len, module, finish_d), res = 1)
+    em = transform(eb, translate = vec3((x0 + x1) * 0.5, (y0 + y1) * 0.5, finish_d * 0.5))
+    ei = set(em, "id", e, domain = points)
+    es = set(ei, "style", code, domain = points)
+    ec = set(es, "Cd", c.style_color(style = code), domain = points)
+    acc = merge(acc, select(keep, a = ec, b = empty_mesh()))
+}
+
+placed = transform(coursed, rotate = vec3(0.0, yaw, 0.0), translate = base)
+
+carved = repeat (placed, iterations = count(cuts) / 2) |acc| {
+    i = @iteration
+    pa = delete(cuts, where = @index != 2 * i)
+    pb = delete(cuts, where = @index != 2 * i + 1)
+    qa = value(@P, on = pa)
+    qb = value(@P, on = pb)
+    oh = value(@h, on = pa)
+    lo = min(dot(qa - p0, u), dot(qb - p0, u))
+    hi = max(dot(qa - p0, u), dot(qb - p0, u))
+    ca = p0 + u * lo
+    cb = p0 + u * hi
+    neg = u * (0.0 - 1.0)
+    left = clip(acc, origin = ca, normal = neg)
+    right = clip(acc, origin = cb, normal = u)
+    m0 = clip(acc, origin = ca, normal = u)
+    mid = clip(m0, origin = cb, normal = neg)
+    lintel = clip(mid, origin = vec3(0.0, oh, 0.0), normal = vec3(0.0, 1.0, 0.0))
+    acc = merge(left, right, lintel)
+}
+
+mesh = set(carved, "Cd", @Cd * (0.96 + random(0.0, 0.08, rng = jit_rng)), domain = points)
+anchors = empty_points()
+
+output mesh
+output anchors

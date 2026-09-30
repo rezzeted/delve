@@ -44,6 +44,13 @@ struct FillResult {
     pgg::GeoPtr mesh;
     pgg::GeoPtr anchors;
     FillStats stats;
+    // Per-unit point spans in mesh/anchors (merge order; F11 attribution, F12).
+    struct UnitSpan {
+        std::string id, slot;
+        size_t meshBegin = 0, meshEnd = 0;
+        size_t anchorsBegin = 0, anchorsEnd = 0;
+    };
+    std::vector<UnitSpan> units;
 };
 
 struct FillOpts {

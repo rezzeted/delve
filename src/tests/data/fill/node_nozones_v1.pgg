@@ -1,0 +1,65 @@
+# Delve slot asset: node v1 (slots §2.4). Pillar + finished open faces.
+# Faces: course rows of 2-wide elements (split at face center), zone pieces via
+# elem_zone (whole-element rule). Closed faces are absent from `faces` by
+# construction. v1: no running bond on faces, face width = thick exactly.
+
+import codes as c
+import patterns as z
+
+def slot_version() -> (out: int) {
+    out = 1
+}
+
+param faces: geo<points>
+param thick: f32 = 0.6
+param h_pillar: f32 = 3.0
+param style: int = 1
+param module: f32 = 0.25
+param zones: geo<points>
+param rng_seed: int = 7
+
+
+root = rng_from_seed(rng_seed)
+jit_rng = split_rng(root, key = "jitter")
+
+pillar_bare = transform(box(size = vec3(thick, h_pillar, thick), res = 1), translate = vec3(0.0, h_pillar * 0.5, 0.0))
+pillar_s = set(pillar_bare, "style", style, domain = points)
+pillar = set(pillar_s, "Cd", c.style_color_mortar(style = style), domain = points)
+
+def face_rows(center: vec3, normal: vec3, face_h: f32, face_style: int, p_thick: f32, p_hpillar: f32, p_module: f32, p_zones: geo<points>, p_face: int) -> (out: geo<mesh>) {
+    """Course rows of one open face (local: face plane through center, out = normal).
+    Local +x = right of the normal (slots §2.4); the IR flip covers +s parity."""
+    tx = dot(normal, (0, 0, 1))
+    tzz = 0.0 - dot(normal, (1, 0, 0))
+    yaw = degrees(atan2(0.0 - tzz, tx))
+    rows = int(floor(face_h / p_module))
+    half = p_thick * 0.5
+    finish_d = 0.05
+    face = repeat (empty_mesh(), iterations = rows * 2) |acc| {
+        e = @iteration
+        r = e / 2
+        side = e % 2
+        y0 = f32(r) * p_module
+        y1 = y0 + p_module
+        x0 = side == 0 ? 0.0 - half : 0.0
+        x1 = side == 0 ? 0.0 : half
+        code = face_style
+        eb = box(size = vec3(half, p_module, finish_d), res = 1)
+        em = transform(eb, translate = vec3((x0 + x1) * 0.5, (y0 + y1) * 0.5, finish_d * 0.5))
+        es = set(em, "style", code, domain = points)
+        ec = set(es, "Cd", c.style_color(style = code), domain = points)
+        acc = merge(acc, select(code >= 0, a = ec, b = empty_mesh()))
+    }
+    placed = transform(face, rotate = vec3(0.0, yaw, 0.0), translate = center)
+    out = placed
+}
+
+dressed = foreach f in faces {
+    f = face_rows(center = value(@P, on = f), normal = value(@n, on = f), face_h = value(@h, on = f), face_style = value(@style, on = f), p_thick = thick, p_hpillar = h_pillar, p_module = module, p_zones = zones, p_face = value(@face, on = f))
+}
+
+mesh = set(merge(pillar, dressed), "Cd", @Cd * (0.96 + random(0.0, 0.08, rng = jit_rng)), domain = points)
+anchors = empty_points()
+
+output mesh
+output anchors

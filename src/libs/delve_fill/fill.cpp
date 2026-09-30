@@ -816,6 +816,7 @@ bool fill_level(const IrV1& ir, const Project& project, const FillOpts& opts, Fi
     std::vector<pgg::GeoPtr> meshes, anchors;
     if (!assets.empty())
         pgg::appendImportRoot(roots, pgg::findProductLibRoot(assets.begin()->second));
+    size_t meshOff = 0, anchorsOff = 0;
     for (const auto& u : units) {
         pgg::GeoPtr mesh, anch;
         if (!runUnit(u, roots, opts.threads, mesh, anch, err)) return false;
@@ -825,6 +826,16 @@ bool fill_level(const IrV1& ir, const Project& project, const FillOpts& opts, Fi
         if (!anch) return false;
         anch = labelAnchors(anch, u.id, err);
         if (!anch) return false;
+        FillResult::UnitSpan span;
+        span.id = u.id;
+        span.slot = u.slot;
+        span.meshBegin = meshOff;
+        span.meshEnd = meshOff + mesh->pointCount();
+        span.anchorsBegin = anchorsOff;
+        span.anchorsEnd = anchorsOff + anch->pointCount();
+        meshOff = span.meshEnd;
+        anchorsOff = span.anchorsEnd;
+        out.units.push_back(std::move(span));
         meshes.push_back(std::move(mesh));
         anchors.push_back(std::move(anch));
     }
