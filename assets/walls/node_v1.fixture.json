@@ -1,0 +1,1 @@
+{"params": {"faces": "@node_v1.faces.points.json", "thick": 0.6, "h_pillar": 3.0, "style": 1, "module": 0.25, "zones": "@node_v1.zones.points.json", "rng_seed": 7}}

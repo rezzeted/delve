@@ -40,7 +40,9 @@ struct IrWall {
 };
 
 // One run of a transition zone on a unit's local axis (facing/node-face
-// `zones` param, slots §3): t = s - s0_zone, t(l) = t_at_l0 + l (flip=0, v1).
+// `zones` param, slots §3): t = s - s0_zone, t(l) = t_at_l0 + l (flip 0)
+// or t_at_l0 - l (flip 1). Facings always run with +s (flip 0); node-face
+// +x = right of the outward normal, flip covers the +s parity (slots §2.4).
 struct ZonePiece {
     int zone = -1;
     int pattern = 0;  // 0 butt | 1 chase
@@ -49,6 +51,7 @@ struct ZonePiece {
     int flip = 0;  // v1: always 0 (local axes run with +s)
     double width = 0, module = 0;  // meters
     double l0 = 0, l1 = 0;  // local-axis run, l0 < l1
+    int style_a = 0, style_b = 0;  // style codes of the A/B sides (zone_style picks)
 };
 
 // One side facing of a wall (§5.2, slots §2.3). seg runs in the room's

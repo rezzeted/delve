@@ -78,5 +78,6 @@ int role_code(const std::string& name, bool& ok);     // hall=1 corridor=2 crypt
 int pattern_code(const std::string& name, bool& ok);  // butt=0 chase=1
 int door_code(const std::string& name, bool& ok);     // open=1 gate=2
 int decor_code(const std::string& name, bool& ok);    // lamp=1
+int anchor_code(const std::string& name, bool& ok);   // light=1 spawn=2 poi=3
 
 }  // namespace delve

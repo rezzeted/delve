@@ -1,0 +1,46 @@
+# Delve slot asset: room_fill v1 (slots §2.1). Floor slab + flat ceiling + anchors.
+# v1 limits: RECT rooms only (expect fails otherwise); figured plans need fill_v2.
+# Spawn anchor for halls only; light always.
+
+import codes as c
+
+def slot_version() -> (out: int) {
+    out = 1
+}
+
+param contour: geo<points>
+param h: f32 = 3.0
+param role: int = 1
+param style_floor: int = 1
+param style_ceil: int = 3
+param rng_seed: int = 7
+
+
+lo, hi = bbox(contour)
+sx = dot(hi - lo, (1, 0, 0))
+sz = dot(hi - lo, (0, 0, 1))
+cx = (dot(lo, (1, 0, 0)) + dot(hi, (1, 0, 0))) * 0.5
+cz = (dot(lo, (0, 0, 1)) + dot(hi, (0, 0, 1))) * 0.5
+
+floor_bare = transform(box(size = vec3(sx, 0.2, sz), res = 1), translate = vec3(cx, 0.0 - 0.1, cz))
+floor_s = set(floor_bare, "style", style_floor, domain = points)
+floor_mesh = set(floor_s, "Cd", c.style_color(style = style_floor), domain = points)
+ceil_bare = transform(box(size = vec3(sx, 0.2, sz), res = 1), translate = vec3(cx, h + 0.1, cz))
+ceil_s = set(ceil_bare, "style", style_ceil, domain = points)
+ceil_mesh = set(ceil_s, "Cd", c.style_color(style = style_ceil), domain = points)
+mesh = merge(floor_mesh, ceil_mesh)
+
+lamp0 = transform(mesh_line(count = 1, length = 0.0), translate = vec3(cx, h - 0.3, cz))
+lamp1 = set(lamp0, "kind", c.AK_LIGHT(), domain = points)
+lamp2 = set(lamp1, "dir", vec3(0.0, 0.0 - 1.0, 0.0), domain = points, typeinfo = vector)
+lamp = set(lamp2, "range", 6.0, domain = points)
+
+spawn0 = transform(mesh_line(count = 1, length = 0.0), translate = vec3(cx, 0.0, cz))
+spawn1 = set(spawn0, "kind", c.AK_SPAWN(), domain = points)
+spawn2 = set(spawn1, "dir", vec3(0.0, 0.0, 1.0), domain = points, typeinfo = vector)
+spawn = set(spawn2, "range", 0.0, domain = points)
+
+anchors = merge(lamp, select(role == c.RL_HALL(), a = spawn, b = empty_points()))
+
+output mesh
+output anchors

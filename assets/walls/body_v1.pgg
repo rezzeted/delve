@@ -1,0 +1,59 @@
+# Delve slot asset: wall_body v1 (slots §2.2). Mortar-core beam between pillar
+# faces with clipped door openings (lintels above). Deterministic (no rng use).
+
+import codes as c
+
+def slot_version() -> (out: int) {
+    out = 1
+}
+
+def carve(g: geo<mesh>, origin_a: vec3, origin_b: vec3, axis: vec3, open_h: f32) -> (out: geo<mesh>) {
+    """Cut one opening [origin_a, origin_b] x [0, open_h]: sides + lintel."""
+    neg = axis * (0.0 - 1.0)
+    left = clip(g, origin = origin_a, normal = neg)
+    right = clip(g, origin = origin_b, normal = axis)
+    m0 = clip(g, origin = origin_a, normal = axis)
+    midsl = clip(m0, origin = origin_b, normal = neg)
+    lintel = clip(midsl, origin = vec3(0.0, open_h, 0.0), normal = vec3(0.0, 1.0, 0.0))
+    out = merge(left, right, lintel)
+}
+
+param seg: geo<points>
+param thick: f32 = 0.6
+param h_a: f32 = 3.0
+param h_b: f32 = 3.0
+param style: int = 1
+param cuts: geo<points>
+param rng_seed: int = 7
+
+
+p0 = value(@P, on = delete(seg, where = @index != 0))
+p1 = value(@P, on = delete(seg, where = @index != 1))
+dir = p1 - p0
+L = length(dir)
+u = dir / L
+H = max(h_a, h_b)
+mid = (p0 + p1) * 0.5
+yaw = degrees(atan2(0.0 - dot(dir, (0, 0, 1)), dot(dir, (1, 0, 0))))
+beam = transform(box(size = vec3(L, H, thick), res = 1), rotate = vec3(0.0, yaw, 0.0), translate = vec3(dot(mid, (1, 0, 0)), H * 0.5, dot(mid, (0, 0, 1))))
+
+carved = repeat (beam, iterations = count(cuts) / 2) |acc| {
+    i = @iteration
+    pa = delete(cuts, where = @index != 2 * i)
+    pb = delete(cuts, where = @index != 2 * i + 1)
+    qa = value(@P, on = pa)
+    qb = value(@P, on = pb)
+    oh = value(@h, on = pa)
+    la = dot(qa - p0, u)
+    lb = dot(qb - p0, u)
+    lo = min(la, lb)
+    hi = max(la, lb)
+    acc = carve(g = acc, origin_a = p0 + u * lo, origin_b = p0 + u * hi, axis = u, open_h = oh)
+}
+
+mesh_s = set(carved, "style", style, domain = points)
+mesh = set(mesh_s, "Cd", c.style_color_mortar(style = style), domain = points)
+anchors = empty_points()
+
+output mesh
+output anchors

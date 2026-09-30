@@ -1,0 +1,1 @@
+{"params": {"seg": "@body_v1.seg.points.json", "thick": 0.6, "h_a": 3.0, "h_b": 2.6, "style": 1, "cuts": "@body_v1.cuts.points.json", "rng_seed": 7}}

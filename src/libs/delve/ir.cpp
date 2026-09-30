@@ -615,6 +615,7 @@ bool build_ir_v1(const std::string& frozen_json, const std::string& frozen_path,
         size_t facing_in = 0, facing_out = 0;  // indices into ir.facings
         bool has_tface = false;
         bool wraps = false;  // last -> first facing (zone may cross s = period)
+        GridPt sdir;  // T-face only: through-edge walk direction (grid)
         GridPt t_vertex;
         GridPt t_normal;  // outward normal of the T-face (into the room)
     };
@@ -757,8 +758,10 @@ bool build_ir_v1(const std::string& frozen_json, const std::string& frozen_path,
                 const GridPt n = vert ? GridPt{(fr.x0 + fr.x1) / 2 > shared.first ? 1 : -1, 0}
                                       : GridPt{0, (fr.y0 + fr.y1) / 2 > shared.second ? 1 : -1};
                 jt.t_normal = n;
+                // Through-edge walk direction (== +s at the joint).
+                const int w = vert ? ((q.second > p.second) ? 1 : -1) : ((q.first > p.first) ? 1 : -1);
+                jt.sdir = vert ? GridPt{0, w} : GridPt{w, 0};
                 jt.has_tface = true;
-                (void)q;
             } else {
                 // Contour corner between edge e and e+1.
                 const int corner = (walk[j].edge + 1) % static_cast<int>(fr.grid.size());
@@ -816,6 +819,13 @@ bool build_ir_v1(const std::string& frozen_json, const std::string& frozen_path,
         t.room = jt.room;
         t.style_a = style_a;
         t.style_b = style_b;
+        bool sa_ok = false, sb_ok = false;
+        const int code_a = style_code(style_a, sa_ok);
+        const int code_b = style_code(style_b, sb_ok);
+        if (!sa_ok || !sb_ok) {
+            err = frozen_path + ": internal: unresolvable zone styles " + style_a + "|" + style_b;
+            return false;
+        }
         t.pattern = zone_pattern;
         t.width = zone_w;
         t.place = zone_place;
@@ -900,7 +910,7 @@ bool build_ir_v1(const std::string& frozen_json, const std::string& frozen_path,
         }
         // Pieces: zone runs on each involved unit (t from the ORIGINAL s0).
         auto emit = [&](size_t fi, double l_origin, bool is_face, size_t node_i, size_t face_i,
-                        double shift) {
+                        double shift, int flip) {
             const IrFacing& f = ir.facings[fi];
             const double lo = is_face ? jt.s - thick / 2.0 : f.s0 + shift;
             const double hi = is_face ? jt.s + thick / 2.0 : f.s1 + shift;
@@ -912,11 +922,13 @@ bool build_ir_v1(const std::string& frozen_json, const std::string& frozen_path,
                 p.pattern = zone_pattern;
                 p.seed = t.seed;
                 p.t_at_l0 = l_origin - zs0;
-                p.flip = 0;
+                p.flip = flip;
                 p.width = zone_w;
                 p.module = project.fill.row_module;
                 p.l0 = c0 - l_origin;
                 p.l1 = c1 - l_origin;
+                p.style_a = code_a;
+                p.style_b = code_b;
                 if (is_face)
                     ir.nodes[node_i].faces[face_i].zones.push_back(p);
                 else
@@ -924,14 +936,18 @@ bool build_ir_v1(const std::string& frozen_json, const std::string& frozen_path,
             }
         };
         const double out_shift = (jt.wraps && zone_place == "corner") ? jt.period : 0.0;
-        emit(jt.facing_in, f_in.s0, false, 0, 0, 0.0);
-        emit(jt.facing_out, f_out.s0 + out_shift, false, 0, 0, out_shift);
+        emit(jt.facing_in, f_in.s0, false, 0, 0, 0.0, 0);  // facings run with +s
+        emit(jt.facing_out, f_out.s0 + out_shift, false, 0, 0, out_shift, 0);
         if (jt.has_tface && zone_place == "corner") {
             const std::string nid = "node:" + std::to_string(jt.t_vertex.first) + "," +
                                     std::to_string(jt.t_vertex.second);
             const size_t ni = node_idx[jt.t_vertex];
             const size_t fai = face_idx[{nid, jt.t_normal}];
-            emit(jt.facing_out, jt.s, true, ni, fai, 0.0);
+            // Face +x = right of the outward normal (slots §2.4); flip iff it
+            // opposes +s (the through-edge walk direction).
+            const GridPt right{jt.t_normal.second, -jt.t_normal.first};
+            const int flip = (right == jt.sdir) ? 0 : 1;
+            emit(jt.facing_out, jt.s, true, ni, fai, 0.0, flip);
         }
         ir.transitions.push_back(std::move(t));
     }
@@ -1023,7 +1039,8 @@ bool write_ir_v1_json(const IrV1& ir, std::string& text_out, std::string& err) {
     auto jpiece = [](const ZonePiece& p) {
         return nlohmann::ordered_json{{"zone", p.zone}, {"pattern", p.pattern}, {"seed", p.seed},
                                       {"t_at_l0", p.t_at_l0}, {"flip", p.flip}, {"width", p.width},
-                                      {"module", p.module}, {"l", {p.l0, p.l1}}};
+                                      {"module", p.module}, {"l", {p.l0, p.l1}},
+                                      {"styles", {p.style_a, p.style_b}}};
     };
     nlohmann::ordered_json jfac = nlohmann::ordered_json::array();
     for (const auto& f : ir.facings) {
@@ -1134,6 +1151,8 @@ bool j_piece(const nlohmann::json& j, ZonePiece& p) {
         if (!l.is_array() || l.size() != 2) return false;
         p.l0 = l[0].get<double>();
         p.l1 = l[1].get<double>();
+        p.style_a = j.at("styles").at(0).get<int>();
+        p.style_b = j.at("styles").at(1).get<int>();
     } catch (...) {
         return false;
     }

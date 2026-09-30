@@ -1,0 +1,1 @@
+{"params": {"seg": "@facing_v1.seg.points.json", "n": [0, 0, 1], "h": 3.0, "style": 1, "module": 0.25, "cuts": "@facing_v1.cuts.points.json", "zones": "@facing_v1.zones.points.json", "rng_seed": 7}}

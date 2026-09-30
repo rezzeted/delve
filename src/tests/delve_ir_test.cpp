@@ -182,21 +182,24 @@ TEST(IrRealLayout, ForcedTransitions) {
     std::set<int> live;
     for (const auto& t : ir.transitions) live.insert(t.id);
     std::set<int> used;
-    auto check_pieces = [&](const std::vector<delve::ZonePiece>& pieces) {
+    auto check_pieces = [&](const std::vector<delve::ZonePiece>& pieces, bool is_face) {
         for (const auto& z : pieces) {
             EXPECT_TRUE(live.count(z.zone)) << z.zone;
             used.insert(z.zone);
             EXPECT_EQ(z.pattern, 0);
-            EXPECT_EQ(z.flip, 0);
+            if (!is_face)
+                EXPECT_EQ(z.flip, 0);  // facings run with +s; faces carry parity
+            else
+                EXPECT_TRUE(z.flip == 0 || z.flip == 1);
             EXPECT_DOUBLE_EQ(z.width, 1.0);
             EXPECT_DOUBLE_EQ(z.module, 0.25);
             EXPECT_LT(z.l0, z.l1);
             EXPECT_EQ(z.seed, delve::zone_seed(z.zone));
         }
     };
-    for (const auto& f : ir.facings) check_pieces(f.zones);
+    for (const auto& f : ir.facings) check_pieces(f.zones, false);
     for (const auto& n : ir.nodes)
-        for (const auto& f : n.faces) check_pieces(f.zones);
+        for (const auto& f : n.faces) check_pieces(f.zones, true);
     EXPECT_EQ(used, live);
     // Transition ids are dense and ordered by (room, s0).
     for (size_t i = 0; i < ir.transitions.size(); ++i) EXPECT_EQ(ir.transitions[i].id, (int)i);
@@ -270,6 +273,8 @@ TEST(IrCorner, ButtCentered) {
     // Pieces of transition 0: facing runs + the T-face run.
     ASSERT_EQ(f0->zones.size(), 1u);
     EXPECT_EQ(f0->zones[0].zone, 0);
+    EXPECT_EQ(f0->zones[0].style_a, 1);  // stone
+    EXPECT_EQ(f0->zones[0].style_b, 2);  // brick
     EXPECT_NEAR(f0->zones[0].l0, 1.2, 1e-9);
     EXPECT_NEAR(f0->zones[0].l1, 1.4, 1e-9);
     EXPECT_NEAR(f0->zones[0].t_at_l0, -1.2, 1e-9);
@@ -284,6 +289,7 @@ TEST(IrCorner, ButtCentered) {
     EXPECT_NEAR(tf->zones[0].l0, -0.3, 1e-9);
     EXPECT_NEAR(tf->zones[0].l1, 0.3, 1e-9);
     EXPECT_NEAR(tf->zones[0].t_at_l0, 0.5, 1e-9);
+    EXPECT_EQ(tf->zones[0].flip, 1);  // face +x opposes +s here
     // Transition 1 pieces on f1 (second piece: f1 also closes transition 0) and f2.
     ASSERT_EQ(f1->zones.size(), 2u);
     EXPECT_EQ(f1->zones[0].zone, 0);
@@ -291,6 +297,8 @@ TEST(IrCorner, ButtCentered) {
     EXPECT_NEAR(f1->zones[0].l1, 0.2, 1e-9);
     EXPECT_NEAR(f1->zones[0].t_at_l0, 0.8, 1e-9);
     EXPECT_EQ(f1->zones[1].zone, 1);
+    EXPECT_EQ(f1->zones[1].style_a, 2);  // brick
+    EXPECT_EQ(f1->zones[1].style_b, 1);  // stone
     EXPECT_NEAR(f1->zones[1].l0, 7.2, 1e-9);
     EXPECT_NEAR(f1->zones[1].l1, 7.4, 1e-9);
     EXPECT_NEAR(f1->zones[1].t_at_l0, -7.2, 1e-9);

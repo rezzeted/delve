@@ -390,4 +390,13 @@ int decor_code(const std::string& name, bool& ok) {
     return 0;
 }
 
+int anchor_code(const std::string& name, bool& ok) {
+    ok = true;
+    if (name == "light") return 1;
+    if (name == "spawn") return 2;
+    if (name == "poi") return 3;
+    ok = false;
+    return 0;
+}
+
 }  // namespace delve

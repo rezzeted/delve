@@ -1,0 +1,50 @@
+# Delve slot asset: door v1 (slots §2.5). Frame + leaf + threshold in the clear
+# opening. Fixed neutral palette (no style param by contract). open = closed
+# wooden leaf; gate = leaf + iron bars. Deterministic (no rng use).
+
+import codes as c
+
+def slot_version() -> (out: int) {
+    out = 1
+}
+
+param seg: geo<points>
+param h: f32 = 2.2
+param frame: f32 = 0.15
+param thick: f32 = 0.6
+param dtype: int = 1
+param rng_seed: int = 7
+
+
+p0 = value(@P, on = delete(seg, where = @index != 0))
+p1 = value(@P, on = delete(seg, where = @index != 1))
+dir = p1 - p0
+L = length(dir)
+yaw = degrees(atan2(0.0 - dot(dir, (0, 0, 1)), dot(dir, (1, 0, 0))))
+base = vec3(dot(p0, (1, 0, 0)), 0.0, dot(p0, (0, 0, 1)))
+
+frame_c = vec3(0.55, 0.53, 0.50)
+leaf_c = vec3(0.35, 0.25, 0.18)
+iron_c = vec3(0.15, 0.15, 0.17)
+
+jamb_l = transform(box(size = vec3(frame, h, thick), res = 1), translate = vec3(0.0 - frame * 0.5, h * 0.5, 0.0))
+jamb_r = transform(box(size = vec3(frame, h, thick), res = 1), translate = vec3(L + frame * 0.5, h * 0.5, 0.0))
+beam = transform(box(size = vec3(L + frame * 2.0, frame, thick), res = 1), translate = vec3(L * 0.5, h + frame * 0.5, 0.0))
+sill = transform(box(size = vec3(L + frame * 2.0, 0.06, thick), res = 1), translate = vec3(L * 0.5, 0.0 - 0.01, 0.0))
+stone = set(merge(jamb_l, jamb_r, beam, sill), "Cd", frame_c, domain = points)
+
+leaf_bare = transform(box(size = vec3(L, h - 0.05, 0.08), res = 1), translate = vec3(L * 0.5, (h - 0.05) * 0.5 + 0.02, 0.0))
+leaf = set(leaf_bare, "Cd", leaf_c, domain = points)
+
+bar0 = transform(box(size = vec3(0.06, h - 0.1, 0.06), res = 1), translate = vec3(L * 0.25, h * 0.5, 0.0))
+bar1 = transform(box(size = vec3(0.06, h - 0.1, 0.06), res = 1), translate = vec3(L * 0.5, h * 0.5, 0.0))
+bar2 = transform(box(size = vec3(0.06, h - 0.1, 0.06), res = 1), translate = vec3(L * 0.75, h * 0.5, 0.0))
+rail = transform(box(size = vec3(L, 0.06, 0.06), res = 1), translate = vec3(L * 0.5, h * 0.6, 0.0))
+bars = set(merge(bar0, bar1, bar2, rail), "Cd", iron_c, domain = points)
+
+local_mesh = merge(stone, leaf, select(dtype == c.DR_GATE(), a = bars, b = empty_mesh()))
+mesh = transform(local_mesh, rotate = vec3(0.0, yaw, 0.0), translate = base)
+anchors = empty_points()
+
+output mesh
+output anchors

@@ -1,0 +1,62 @@
+# Delve asset library: transition-zone patterns (slots §3).
+# One def for all units of a zone: same params + same rng => same partition.
+
+import codes as c
+
+def zone_style(pattern: int, t: f32, y: f32, seed: int, width: f32, module: f32) -> (out: int) {
+    """Style side of a zone point: 0 = A, 1 = B. seed is reserved (ragged/mix
+    patterns); v1 patterns do not read it but callers MUST pass it."""
+    out = pattern == c.ZP_BUTT() ? (t < width * 0.5 ? 0 : 1) : chase_side(t = t, y = y, width = width, module = module)
+}
+
+def chase_side(t: f32, y: f32, width: f32, module: f32) -> (out: int) {
+    """Chase (v1): the boundary steps by half a tooth every course; tooth = module."""
+    course = int(floor(y / module))
+    tooth = module
+    b = width * 0.5 + (course % 2 == 0 ? 0.0 - tooth * 0.5 : tooth * 0.5)
+    out = t < b ? 0 : 1
+}
+
+def zone_side(pattern: int, t: f32, y: f32, seed: int, width: f32, module: f32, own: int, sa: int, sb: int) -> (out: int) {
+    """Style CODE at one zone point: outside t in [0, width] the zone does not
+    apply (own style); inside, zone_style picks sa/sb. No extrapolation."""
+    outside = (t < 0.0) | (t > width)
+    side = zone_style(pattern = pattern, t = t, y = y, seed = seed, width = width, module = module)
+    out = outside ? own : (side == 0 ? sa : sb)
+}
+
+def elem_zone(own: int, x0: f32, x1: f32, y0: f32, y1: f32, zones: geo<points>) -> (code: int) {
+    """Whole-element rule (slots §3, 5.7): scan the zone pieces covering the
+    [x0, x1] footprint, paint by unanimous corners, or return -1 (skip) when
+    the corners disagree. Corners are inset 1e-4 (boundary touch != crossing).
+    Last covering piece wins (overlaps are pathological)."""
+    expect count(zones) % 2 == 0: "elem_zone: zone pieces come in point pairs"
+    code = repeat (own, iterations = count(zones) / 2) |ca| {
+        j = @iteration
+        pa = delete(zones, where = @index != 2 * j)
+        pb = delete(zones, where = @index != 2 * j + 1)
+        la = dot(value(@P, on = pa), (1, 0, 0))
+        lb = dot(value(@P, on = pb), (1, 0, 0))
+        covers = (x0 <= lb) & (x1 >= la)
+        pat = value(@pattern, on = pa)
+        sd = value(@seed, on = pa)
+        t0 = value(@t_at_l0, on = pa)
+        fl = value(@flip, on = pa)
+        wd = value(@width, on = pa)
+        md = value(@module, on = pa)
+        sa = value(@style_a, on = pa)
+        sb = value(@style_b, on = pa)
+        lx0 = x0 + 0.0001
+        lx1 = x1 - 0.0001
+        ly0 = y0 + 0.0001
+        ly1 = y1 - 0.0001
+        tx0 = fl == 0 ? t0 + lx0 : t0 - lx0
+        tx1 = fl == 0 ? t0 + lx1 : t0 - lx1
+        s00 = zone_side(pattern = pat, t = tx0, y = ly0, seed = sd, width = wd, module = md, own = own, sa = sa, sb = sb)
+        s10 = zone_side(pattern = pat, t = tx1, y = ly0, seed = sd, width = wd, module = md, own = own, sa = sa, sb = sb)
+        s01 = zone_side(pattern = pat, t = tx0, y = ly1, seed = sd, width = wd, module = md, own = own, sa = sa, sb = sb)
+        s11 = zone_side(pattern = pat, t = tx1, y = ly1, seed = sd, width = wd, module = md, own = own, sa = sa, sb = sb)
+        agree = (s00 == s10) & (s00 == s01) & (s00 == s11)
+        ca = covers ? (agree ? s00 : 0 - 1) : ca
+    }
+}

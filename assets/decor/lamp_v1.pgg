@@ -1,0 +1,37 @@
+# Delve slot asset: decor lamp v1 (slots §2.6). Fixture + exactly one light anchor.
+# Mount-agnostic: the fixture hangs along the mount normal @n (ceiling or wall).
+
+import codes as c
+
+def slot_version() -> (out: int) {
+    out = 1
+}
+
+param p: geo<points>
+param style: int = 1
+param tag: int = 1
+param rng_seed: int = 7
+
+
+root = rng_from_seed(rng_seed)
+jit_rng = split_rng(root, key = "jitter")
+
+at = value(@P, on = p)
+mn = normalize(value(@n, on = p))
+
+stem = transform(box(size = vec3(0.06, 0.18, 0.06), res = 1), translate = at + mn * 0.09)
+shade = transform(box(size = vec3(0.34, 0.10, 0.34), res = 1), translate = at + mn * 0.23)
+bulb = transform(box(size = vec3(0.12, 0.10, 0.12), res = 1), translate = at + mn * 0.30)
+metal_s = set(merge(stem, shade), "style", style, domain = points)
+metal = set(metal_s, "Cd", c.style_color(style = style) * 0.6, domain = points)
+glow_s = set(bulb, "style", style, domain = points)
+glow = set(glow_s, "Cd", vec3(1.0, 0.9, 0.7), domain = points)
+mesh = set(merge(metal, glow), "Cd", @Cd * (0.96 + random(0.0, 0.08, rng = jit_rng)), domain = points)
+
+a0 = transform(mesh_line(count = 1, length = 0.0), translate = at + mn * 0.30)
+a1 = set(a0, "kind", c.AK_LIGHT(), domain = points)
+a2 = set(a1, "dir", mn, domain = points, typeinfo = vector)
+anchors = set(a2, "range", 6.0, domain = points)
+
+output mesh
+output anchors

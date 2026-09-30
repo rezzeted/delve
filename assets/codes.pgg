@@ -1,0 +1,98 @@
+# Delve asset library: int codes (slots §1) + style palettes.
+# Values are normative: delve/project.h tables MUST match (codes_parity test).
+# 0 = unset everywhere EXCEPT zone patterns (§3: butt = 0, chase = 1).
+
+def ST_STONE() -> (out: int) {
+    """stone finish (codes.pgg)."""
+    out = 1
+}
+
+def ST_BRICK() -> (out: int) {
+    """brick finish (codes.pgg)."""
+    out = 2
+}
+
+def ST_PLAIN() -> (out: int) {
+    """plain plaster finish (codes.pgg)."""
+    out = 3
+}
+
+def ST_MORTAR() -> (out: int) {
+    """mortar finish (codes.pgg)."""
+    out = 4
+}
+
+def RL_HALL() -> (out: int) {
+    """hall role (codes.pgg)."""
+    out = 1
+}
+
+def RL_CORRIDOR() -> (out: int) {
+    """corridor role (codes.pgg)."""
+    out = 2
+}
+
+def RL_CRYPT() -> (out: int) {
+    """crypt role (codes.pgg)."""
+    out = 3
+}
+
+def RL_ENTRY() -> (out: int) {
+    """entry role (codes.pgg)."""
+    out = 4
+}
+
+def RL_STAIRS() -> (out: int) {
+    """stairs role (codes.pgg)."""
+    out = 5
+}
+
+def DR_OPEN() -> (out: int) {
+    """open doorway (codes.pgg)."""
+    out = 1
+}
+
+def DR_GATE() -> (out: int) {
+    """gate doorway (codes.pgg)."""
+    out = 2
+}
+
+def DT_LAMP() -> (out: int) {
+    """lamp decor tag (codes.pgg)."""
+    out = 1
+}
+
+def AK_LIGHT() -> (out: int) {
+    """light anchor (codes.pgg)."""
+    out = 1
+}
+
+def AK_SPAWN() -> (out: int) {
+    """spawn anchor (codes.pgg)."""
+    out = 2
+}
+
+def AK_POI() -> (out: int) {
+    """point-of-interest anchor (codes.pgg)."""
+    out = 3
+}
+
+def ZP_BUTT() -> (out: int) {
+    """butt joint pattern (codes.pgg)."""
+    out = 0
+}
+
+def ZP_CHASE() -> (out: int) {
+    """chase pattern (codes.pgg)."""
+    out = 1
+}
+
+def style_color(style: int) -> (out: vec3) {
+    """Face color of a finished style. Unknown codes come out magenta (fail-loud)."""
+    out = style == ST_STONE() ? vec3(0.62, 0.60, 0.57) : (style == ST_BRICK() ? vec3(0.58, 0.30, 0.22) : (style == ST_PLAIN() ? vec3(0.75, 0.73, 0.70) : (style == ST_MORTAR() ? vec3(0.52, 0.50, 0.47) : vec3(1.0, 0.0, 1.0))))
+}
+
+def style_color_mortar(style: int) -> (out: vec3) {
+    """Mortar-core color behind facing gaps (slots §3): grayed variant of the style."""
+    out = style == ST_STONE() ? vec3(0.45, 0.43, 0.40) : (style == ST_BRICK() ? vec3(0.42, 0.36, 0.32) : (style == ST_PLAIN() ? vec3(0.55, 0.53, 0.50) : (style == ST_MORTAR() ? vec3(0.50, 0.48, 0.45) : vec3(1.0, 0.0, 1.0))))
+}
