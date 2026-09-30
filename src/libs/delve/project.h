@@ -1,11 +1,14 @@
 #pragma once
 
-// Delve project, fill tier v0 (docs/project_v0.md). Provisional: the full
-// project format (F1-F3) lands at D2; this covers what D1 filling needs.
+// Delve project: fill tier v0 (docs/project_v0.md) + full v1 (docs/project_v1.md).
+// load_project dispatches on "format" (delve-project/0 or /1).
 
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
+
+#include "layout.h"
 
 namespace delve {
 
@@ -16,6 +19,7 @@ struct RoleEntry {
     std::string style = "stone";
     std::string floor = "stone";
     std::string ceil = "plain";
+    std::optional<double> wall_t;  // v1 only (role level); nullopt = project wall_t
 };
 
 struct TransitionDefaults {
@@ -49,8 +53,10 @@ struct FillParams {
 };
 
 struct Project {
+    std::string format = kProjectFormat;
     int seed = 1;
     FillParams fill;
+    std::optional<LayoutParams> layout;  // v1 only; nullopt on /0
     std::map<std::string, std::string> slots;  // slot kind -> asset path
     std::vector<std::string> asset_roots;
     std::string dir;  // project file's directory (resolves relative asset_roots)
@@ -70,6 +76,25 @@ RoleEntry resolve_role(const Project& project, const std::string& role);
 // for outer sides. Last matching side_rule wins; no match -> role style.
 std::string resolve_side_style(const Project& project, const std::string& room_role, bool outer,
                                const std::string& adjacent_role);
+
+// Same, over an explicitly resolved base style (v1: room -> template ->
+// role -> project). resolve_side_style is this with a role-resolved base.
+std::string apply_side_rules(const Project& project, const std::string& base_style, bool outer,
+                             const std::string& adjacent_role);
+
+// 4.2 hierarchy, v1 levels (room -> template -> role -> project).
+struct ResolvedFill {
+    double h = 3.0;
+    double wall_t = 0.6;
+    std::string style = "stone", floor = "stone", ceil = "plain";
+};
+ResolvedFill resolve_room_fill(const Project& project, const std::string& role,
+                               const FillOverride* tmpl, const FillOverride* room);
+
+// 5.6 seed split (v1): layout and fill sub-seeds. The v0 path keeps using
+// Project.seed as the fill seed directly.
+int layout_seed(int seed);
+int fill_seed_v1(int seed);
 
 // Name -> int code tables. Values MUST match assets codes.pgg (parity test).
 // ok=false on unknown name.

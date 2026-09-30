@@ -2,8 +2,11 @@
 
 #include "project.h"
 
+#include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <sstream>
 
 #include <nlohmann/json.hpp>
@@ -51,6 +54,137 @@ bool get_str(const nlohmann::json& j, const std::string& key, std::string& out, 
 
 }  // namespace
 
+// v1 cross-tier checks (R-G3, 5.4). Layout and fill are parsed.
+static bool check_project_v1(const Project& p, const std::string& path, std::string& err) {
+    const LayoutParams& l = *p.layout;
+    const FillParams& f = p.fill;
+    const double cell = f.cell;
+
+    std::string bad;
+    if (!check_connected(l, bad)) {
+        err = path + ": layout.passages: room \"" + bad + "\" is unreachable (graph must be connected)";
+        return false;
+    }
+    std::map<std::string, std::string> role_of;
+    for (const auto& r : l.rooms) role_of[r.id] = r.role;
+    for (const auto& r : l.rooms) {
+        if (r.role != "corridor") continue;
+        const auto nb = passage_neighbors(l, r.id);
+        if (nb.size() != 2) {
+            err = path + ": layout.rooms: corridor \"" + r.id + "\" has " +
+                  std::to_string(nb.size()) + " neighbors, expected exactly 2";
+            return false;
+        }
+        for (const auto& n : nb)
+            if (role_of[n] == "corridor") {
+                err = path + ": layout.passages: corridor \"" + r.id + "\" connects to corridor \"" +
+                      n + "\" (corridors need non-corridor neighbors)";
+                return false;
+            }
+    }
+    if (const auto missing = roles_without_template(l); !missing.empty()) {
+        err = path + ": layout: role \"" + missing.front() +
+              "\" has no template (add an explicit template or widen rooms_rect.roles)";
+        return false;
+    }
+
+    double wt_max = f.wall_t;
+    for (const auto& [name, re] : f.roles)
+        if (re.wall_t) {
+            if (!(*re.wall_t < cell)) {
+                err = path + ": fill.roles." + name + ".wall_t (" + std::to_string(*re.wall_t) +
+                      ") must be < cell (" + std::to_string(cell) + ") [5.4]";
+                return false;
+            }
+            wt_max = std::max(wt_max, *re.wall_t);
+        }
+    for (size_t i = 0; i < l.templates.size(); ++i) {
+        if (!l.templates[i].fill.wall_t) continue;
+        const double wt = *l.templates[i].fill.wall_t;
+        if (!(wt < cell)) {
+            err = path + ": layout.templates[" + std::to_string(i) + "].fill.wall_t (" +
+                  std::to_string(wt) + ") must be < cell (" + std::to_string(cell) + ") [5.4]";
+            return false;
+        }
+        wt_max = std::max(wt_max, wt);
+    }
+    for (size_t i = 0; i < l.rooms.size(); ++i) {
+        if (!l.rooms[i].fill.wall_t) continue;
+        const double wt = *l.rooms[i].fill.wall_t;
+        if (!(wt < cell)) {
+            err = path + ": layout.rooms[" + std::to_string(i) + "].fill.wall_t (" +
+                  std::to_string(wt) + ") must be < cell (" + std::to_string(cell) + ") [5.4]";
+            return false;
+        }
+        wt_max = std::max(wt_max, wt);
+    }
+
+    const double corr_clear = l.corridor_width * cell - wt_max;
+    if (!(corr_clear >= f.min_passage)) {
+        err = path + ": layout.corridors.width: clear width " + std::to_string(corr_clear) +
+              " < min_passage " + std::to_string(f.min_passage) +
+              " [5.4; raise width/cell or lower wall_t]";
+        return false;
+    }
+    for (size_t i = 0; i < l.templates.size(); ++i) {
+        const auto& t = l.templates[i];
+        if (std::find(t.roles.begin(), t.roles.end(), "corridor") == t.roles.end()) continue;
+        const double clear = template_min_bbox_side(t) * cell - wt_max;
+        if (!(clear >= f.min_passage)) {
+            err = path + ": layout.templates[" + std::to_string(i) +
+                  "]: min bbox side gives clear width " + std::to_string(clear) + " < min_passage " +
+                  std::to_string(f.min_passage) + " [5.4]";
+            return false;
+        }
+    }
+
+    const auto check_opening = [&](int len_cells, const std::string& where) {
+        const double clear = len_cells * cell - 2.0 * f.frame;
+        if (!(clear > 0.0) || !(clear >= f.min_opening)) {
+            err = path + ": " + where + ": clear opening " + std::to_string(clear) +
+                  " must be > 0 and >= min_opening " + std::to_string(f.min_opening) + " [5.4]";
+            return false;
+        }
+        return true;
+    };
+    if (!check_opening(l.door_length, "layout.door_length")) return false;
+    for (size_t i = 0; i < l.templates.size(); ++i) {
+        const auto& t = l.templates[i];
+        const std::string where = "layout.templates[" + std::to_string(i) + "]";
+        if (!t.doors.manual && t.doors.length &&
+            !check_opening(*t.doors.length, where + ".doors.length"))
+            return false;
+        if (t.doors.manual)
+            for (size_t s = 0; s < t.doors.segments.size(); ++s) {
+                const auto [a, b] = t.doors.segments[s];
+                const int len = std::abs(a.first - b.first) + std::abs(a.second - b.second);
+                if (!check_opening(len, where + ".doors.manual[" + std::to_string(s) + "]"))
+                    return false;
+            }
+    }
+
+    const auto check_corner = [&](int dist_cells, const std::string& where) {
+        if (!(dist_cells * cell >= wt_max / 2.0 + f.frame)) {
+            err = path + ": " + where + ": corner distance " + std::to_string(dist_cells) +
+                  " cells < wall_t/2 + frame [5.4; the opening would reach the wall joint]";
+            return false;
+        }
+        return true;
+    };
+    if (!check_corner(l.door_corner_distance, "layout.door_corner_distance")) return false;
+    for (size_t i = 0; i < l.templates.size(); ++i) {
+        const auto& t = l.templates[i];
+        const std::string where = "layout.templates[" + std::to_string(i) + "]";
+        if (!t.doors.manual && t.doors.corner_distance &&
+            !check_corner(*t.doors.corner_distance, where + ".doors.corner_distance"))
+            return false;
+        if (t.doors.manual &&
+            !check_corner(manual_door_min_corner(t), where + ".doors.manual (nearest corner)"))
+            return false;
+    }
+    return true;
+}
+
 bool load_project(const std::string& path, Project& out, std::string& err) {
     Project p;
     std::ifstream in(path, std::ios::binary);
@@ -73,13 +207,21 @@ bool load_project(const std::string& path, Project& out, std::string& err) {
     }
     for (const auto& [key, _] : doc.items()) {
         if (key != "format" && key != "seed" && key != "fill" && key != "slots" &&
-            key != "asset_roots") {
+            key != "asset_roots" && key != "layout") {
             err = path + ": unknown key \"" + key + "\"";
             return false;
         }
     }
-    if (doc.value("format", std::string{}) != kProjectFormat) {
-        err = path + ": unsupported format, expected \"" + kProjectFormat + "\"";
+    const std::string format = doc.value("format", std::string{});
+    const bool v1 = format == kProjectFormatV1;
+    if (!v1 && format != kProjectFormat) {
+        err = path + ": unsupported format \"" + format + "\", expected \"" + kProjectFormatV1 +
+              "\" (or legacy \"" + kProjectFormat + "\")";
+        return false;
+    }
+    p.format = format;
+    if (!v1 && doc.contains("layout")) {
+        err = path + ": layout: requires format \"" + std::string(kProjectFormatV1) + "\"";
         return false;
     }
     if (doc.contains("seed")) {
@@ -137,9 +279,14 @@ bool load_project(const std::string& path, Project& out, std::string& err) {
                     get_str(star, "style", re.style, err, "fill.roles.*");
                     get_str(star, "floor", re.floor, err, "fill.roles.*");
                     get_str(star, "ceil", re.ceil, err, "fill.roles.*");
+                    if (v1 && star.contains("wall_t") && star["wall_t"].is_number() &&
+                        star["wall_t"].get<double>() > 0.0)
+                        re.wall_t = star["wall_t"].get<double>();
                 }
                 for (const auto& [key, _] : entry.items()) {
-                    if (key != "h" && key != "style" && key != "floor" && key != "ceil") {
+                    const bool known = key == "h" || key == "style" || key == "floor" ||
+                                       key == "ceil" || (v1 && key == "wall_t");
+                    if (!known) {
                         err = path + ": fill.roles." + name + "." + key + ": unknown key";
                         return false;
                     }
@@ -150,6 +297,13 @@ bool load_project(const std::string& path, Project& out, std::string& err) {
                     !get_str(entry, "floor", re.floor, err, where) ||
                     !get_str(entry, "ceil", re.ceil, err, where))
                     return false;
+                if (v1 && entry.contains("wall_t")) {
+                    if (!entry["wall_t"].is_number() || !(entry["wall_t"].get<double>() > 0.0)) {
+                        err = path + ": " + where + ".wall_t: expected a number > 0";
+                        return false;
+                    }
+                    re.wall_t = entry["wall_t"].get<double>();
+                }
                 bool ok = false;
                 style_code(re.style, ok);
                 if (!ok) {
@@ -311,6 +465,16 @@ bool load_project(const std::string& path, Project& out, std::string& err) {
         err = path + ": fill.row_module must be > 0";
         return false;
     }
+    if (v1) {
+        if (!doc.contains("layout")) {
+            err = path + ": layout: required in \"" + std::string(kProjectFormatV1) + "\"";
+            return false;
+        }
+        LayoutParams lp;
+        if (!parse_layout(doc["layout"], path, lp, err)) return false;
+        p.layout = std::move(lp);
+        if (!check_project_v1(p, path, err)) return false;
+    }
     out = std::move(p);
     return true;
 }
@@ -330,9 +494,9 @@ RoleEntry resolve_role(const Project& project, const std::string& role) {
     return out;
 }
 
-std::string resolve_side_style(const Project& project, const std::string& room_role, bool outer,
-                               const std::string& adjacent_role) {
-    std::string style = resolve_role(project, room_role).style;
+std::string apply_side_rules(const Project& project, const std::string& base_style, bool outer,
+                             const std::string& adjacent_role) {
+    std::string style = base_style;
     for (const auto& rule : project.fill.side_rules) {
         if (!rule.side.empty()) {
             const bool want_outer = rule.side == "outer";
@@ -344,6 +508,43 @@ std::string resolve_side_style(const Project& project, const std::string& room_r
         style = rule.style;  // later rules win
     }
     return style;
+}
+
+std::string resolve_side_style(const Project& project, const std::string& room_role, bool outer,
+                               const std::string& adjacent_role) {
+    return apply_side_rules(project, resolve_role(project, room_role).style, outer, adjacent_role);
+}
+
+ResolvedFill resolve_room_fill(const Project& project, const std::string& role,
+                               const FillOverride* tmpl, const FillOverride* room) {
+    ResolvedFill out;
+    const RoleEntry base = resolve_role(project, role);
+    out.h = base.h;
+    out.style = base.style;
+    out.floor = base.floor;
+    out.ceil = base.ceil;
+    out.wall_t = base.wall_t.value_or(project.fill.wall_t);
+    for (const FillOverride* o : {tmpl, room}) {
+        if (!o) continue;
+        if (o->h) out.h = *o->h;
+        if (o->wall_t) out.wall_t = *o->wall_t;
+        if (o->style) out.style = *o->style;
+        if (o->floor) out.floor = *o->floor;
+        if (o->ceil) out.ceil = *o->ceil;
+    }
+    return out;
+}
+
+bool is_style_name(const std::string& name) {
+    bool ok = false;
+    style_code(name, ok);
+    return ok;
+}
+
+bool is_door_name(const std::string& name) {
+    bool ok = false;
+    door_code(name, ok);
+    return ok;
 }
 
 int style_code(const std::string& name, bool& ok) {
@@ -397,6 +598,23 @@ int anchor_code(const std::string& name, bool& ok) {
     if (name == "poi") return 3;
     ok = false;
     return 0;
+}
+
+uint32_t fnv1a_32_str(const std::string& s) {
+    uint32_t h = 2166136261u;
+    for (unsigned char c : s) {
+        h ^= c;
+        h *= 16777619u;
+    }
+    return h;
+}
+
+int layout_seed(int seed) {
+    return static_cast<int>(fnv1a_32_str("layout/" + std::to_string(seed)) & 0x7fffffff);
+}
+
+int fill_seed_v1(int seed) {
+    return static_cast<int>(fnv1a_32_str("fill/" + std::to_string(seed)) & 0x7fffffff);
 }
 
 }  // namespace delve

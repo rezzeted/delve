@@ -2,6 +2,7 @@ find_package(nlohmann_json CONFIG REQUIRED)
 
 add_library(delve STATIC
     project.cpp
+    layout.cpp
     ir.cpp
 )
 
