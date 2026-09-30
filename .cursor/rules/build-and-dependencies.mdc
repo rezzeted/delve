@@ -1,0 +1,8 @@
+---
+description: Delve build presets, binaries, and test suites
+alwaysApply: true
+---
+
+# Build And Dependencies
+
+Canonical guidance lives in `AGENTS.md` → «Сборка» and «Тестирование».

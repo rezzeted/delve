@@ -1,0 +1,8 @@
+---
+description: General agent behavior for Delve
+alwaysApply: true
+---
+
+# General Behavior
+
+Canonical guidance lives in `AGENTS.md` (root). Cursor auto-reads `AGENTS.md`; this file is kept only as an always-applied pointer for older rule resolution.

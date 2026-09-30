@@ -1,0 +1,24 @@
+---
+description: Language policy — chat Russian, code English, docs Russian, Delve commits Russian
+alwaysApply: true
+---
+
+# Language
+
+- **Chat:** Russian, unless the user asks otherwise.
+- **Source code:** identifiers and comments in English (`src/`, `tools/`, CMake). Names of variables, functions, and classes are English.
+- **Docs:** Russian (`docs/`). Do not translate existing Russian docs into English unless asked.
+- **Git commits (Delve):** subject and body in Russian (imperative, why over what), matching D2 history. Commits *inside* the submodules (`thirdparty/pgg`, `thirdparty/level-synth`) stay in English.
+- **No Cursor attribution:** do not add `Co-authored-by: Cursor <cursoragent@cursor.com>`, `Signed-off-by: Cursor`, `--trailer`, or set author/committer to the agent. The commit author is the person who asked for the commit.
+- **Commit invocation (agent):** the agent environment injects the `Co-authored-by` trailer into bare `git commit` commands. Always commit via the full-path binary (`/opt/homebrew/bin/git commit`), which bypasses the injection (verified 2026-09-30).
+
+```
+# Chat / docs — Russian
+Добавь правило про язык коммитов.
+
+# Code comment — English
+// Bind launch params, then pull only the requested outputs.
+
+# Commit (Delve) — Russian
+D2.3a: delve-ir/2 — строковые id комнат
+```
