@@ -18,6 +18,15 @@ set_property(TARGET delve_project_test PROPERTY FOLDER tests)
 
 add_test(NAME delve_project_test COMMAND delve_project_test)
 
+add_executable(delve_layout_test delve_layout_test.cpp)
+target_link_libraries(delve_layout_test PRIVATE GTest::gtest_main delve_layout)
+target_compile_definitions(delve_layout_test PRIVATE
+    DELVE_TEST_DATA="${CMAKE_SOURCE_DIR}/src/tests/data")
+target_compile_features(delve_layout_test PRIVATE cxx_std_20)
+set_property(TARGET delve_layout_test PROPERTY FOLDER tests)
+
+add_test(NAME delve_layout_test COMMAND delve_layout_test)
+
 add_executable(delve_ir_test delve_ir_test.cpp)
 target_link_libraries(delve_ir_test PRIVATE GTest::gtest_main delve nlohmann_json::nlohmann_json)
 target_compile_definitions(delve_ir_test PRIVATE

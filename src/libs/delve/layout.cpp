@@ -60,6 +60,8 @@ bool get_cell_pt(const nlohmann::json& j, CellPt& out, std::string& err, const s
     return true;
 }
 
+}  // namespace
+
 long long contour_area2(const std::vector<CellPt>& c) {
     long long a = 0;
     for (size_t i = 0; i < c.size(); ++i) {
@@ -69,6 +71,8 @@ long long contour_area2(const std::vector<CellPt>& c) {
     }
     return a;
 }
+
+namespace {
 
 // Closed intersection of two axis-aligned segments (touch counts).
 bool ortho_segs_touch(CellPt a, CellPt b, CellPt c, CellPt d) {
@@ -129,6 +133,16 @@ bool parse_contour(const nlohmann::json& j, const std::string& path, const std::
     if (std::set<CellPt>(c.begin(), c.end()).size() != n) {
         err = path + ": " + where + ": duplicate points";
         return false;
+    }
+    for (size_t i = 0; i < n; ++i) {
+        // edgar's PolygonGrid2D rejects these at construction; report at F1.
+        const CellPt a = c[i], b = c[(i + 1) % n], d = c[(i + 2) % n];
+        if ((a.first == b.first && b.first == d.first) ||
+            (a.second == b.second && b.second == d.second)) {
+            err = path + ": " + where + ": redundant vertex at point " +
+                  std::to_string((i + 1) % n) + " (three collinear consecutive points)";
+            return false;
+        }
     }
     if (contour_area2(c) == 0) {
         err = path + ": " + where + ": zero area";

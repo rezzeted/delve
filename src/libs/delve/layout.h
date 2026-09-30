@@ -115,6 +115,10 @@ int catalog_size(const LayoutParams& l);  // parametric + explicit
 // Roles of the graph lacking any template (parametric or explicit).
 std::vector<std::string> roles_without_template(const LayoutParams& l);
 
+// Signed area x2 of a cell contour (shoelace). edgar's PolygonGrid2D accepts
+// area2 < 0 ("clockwise" by its own test); the F2 catalog reverses the rest.
+long long contour_area2(const std::vector<CellPt>& c);
+
 // Minimum bbox side of a template contour (cells). Used by the 5.4 corridor
 // sanity check for explicit corridor-role templates.
 int template_min_bbox_side(const TemplateDecl& t);
