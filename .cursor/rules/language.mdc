@@ -11,6 +11,8 @@ alwaysApply: true
 - **Git commits (Delve):** subject and body in Russian (imperative, why over what), matching D2 history. Commits *inside* the submodules (`thirdparty/pgg`, `thirdparty/level-synth`) stay in English.
 - **No Cursor attribution:** do not add `Co-authored-by: Cursor <cursoragent@cursor.com>`, `Signed-off-by: Cursor`, `--trailer`, or set author/committer to the agent. The commit author is the person who asked for the commit.
 - **Commit invocation (agent):** the agent environment injects the `Co-authored-by` trailer into bare `git commit` commands. Always commit via the full-path binary (`/opt/homebrew/bin/git commit`), which bypasses the injection (verified 2026-09-30).
+- **Attribution tripwire (agent):** before committing, read `~/.cursor/cli-config.json` → `attribution.attributeCommitsToAgent`. If `true`, warn the user in chat (the setting flipped back on) and still commit via the full-path binary — the bypass works regardless of the setting. Never edit that file from the agent: the CLI reverts agent-made edits there; the user flips it manually.
+- **Post-commit verify (agent):** after every commit, check the message with the full-path binary (`git log -1`). If a `Co-authored-by` trailer slipped in, strip it immediately (amend the cleaned message via the full-path binary) and warn the user.
 
 ```
 # Chat / docs — Russian
