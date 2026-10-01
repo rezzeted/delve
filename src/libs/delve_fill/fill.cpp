@@ -788,6 +788,16 @@ bool fill_level(const IrV2& ir, const Project& project, const FillOpts& opts, Fi
         assets[slot] = found;
     }
 
+    // F8: one content key per slot (R-A7 covers the whole import closure).
+    std::map<std::string, uint64_t> assetKeys;
+    if (opts.cache) {
+        for (const auto& [slot, file] : assets) {
+            uint64_t ak = 0;
+            if (!asset_content_key(file, roots, ak, err)) return false;
+            assetKeys[slot] = ak;
+        }
+    }
+
     std::map<std::string, const IrDoor*> doors;
     for (const auto& d : ir.doors) doors[d.id] = &d;
     // 5.6: v1 projects fill from the split fill seed; the v0 path keeps using
@@ -840,7 +850,22 @@ bool fill_level(const IrV2& ir, const Project& project, const FillOpts& opts, Fi
     size_t meshOff = 0, anchorsOff = 0;
     for (const auto& u : units) {
         pgg::GeoPtr mesh, anch;
-        if (!runUnit(u, roots, opts.threads, mesh, anch, err)) return false;
+        if (opts.cache) {
+            UnitKey key;
+            if (!unit_key(u.slot, assetKeys[u.slot], u.bindings, key, err)) return false;
+            UnitCache::Entry e;
+            if (opts.cache->lookup(key, e)) {
+                mesh = e.mesh;
+                anch = e.anchors;
+                out.stats.reused.push_back(u.id);
+            } else {
+                if (!runUnit(u, roots, opts.threads, mesh, anch, err)) return false;
+                opts.cache->store(key, mesh, anch);
+                out.stats.reran.push_back(u.id);
+            }
+        } else {
+            if (!runUnit(u, roots, opts.threads, mesh, anch, err)) return false;
+        }
         mesh = rigidGeo(mesh, u.yawDeg, u.tx, u.ty, u.tz, u.id, err);
         if (!mesh) return false;
         anch = rigidGeo(anch, u.yawDeg, u.tx, u.ty, u.tz, u.id, err);

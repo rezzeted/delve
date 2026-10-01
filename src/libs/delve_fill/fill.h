@@ -1,11 +1,14 @@
 #pragma once
 
 // Delve fill (D1.3, F6): slot asset checks (R-A3) + level fill from IR v1.
+// F8: optional unit-output cache (cache.h), keyed by slot + bindings + asset
+// content (R-A7); local-frame hits are placed at assembly.
 
 #include <string>
 #include <vector>
 
 #include "pgg/eval.h"
+#include "cache.h"
 #include "ir.h"
 #include "project.h"
 
@@ -38,6 +41,9 @@ bool check_asset(const std::string& slot, const std::string& asset_path,
 // (delve/slot or delve/run, F10 style) on any failure.
 struct FillStats {
     size_t rooms = 0, bodies = 0, facings = 0, nodes = 0, doors = 0, lamps = 0;
+    // F8 cache accounting (empty when FillOpts::cache is null): unit ids that
+    // were reused from the cache vs recomputed.
+    std::vector<std::string> reused, reran;
 };
 
 struct FillResult {
@@ -55,7 +61,8 @@ struct FillResult {
 
 struct FillOpts {
     std::string delve_assets;
-    unsigned threads = 0;  // 0 = PGG default (hardware)
+    unsigned threads = 0;        // 0 = PGG default (hardware)
+    UnitCache* cache = nullptr;  // F8: caller-owned unit cache (null = off)
 };
 
 bool fill_level(const IrV2& ir, const Project& project, const FillOpts& opts,

@@ -5,6 +5,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -467,7 +468,7 @@ delve::Project loadD2ChainProject() {
     return p;
 }
 
-delve::IrV2 generateIr(delve::Project& p) {
+delve::LayoutData generateLayoutData(delve::Project& p) {
     delve::layout::Catalog cat;
     std::string err;
     EXPECT_TRUE(delve::layout::build_catalog(p, cat, err)) << err;
@@ -480,10 +481,17 @@ delve::IrV2 generateIr(delve::Project& p) {
     EXPECT_TRUE(delve::layout::write_layout_json(lr, p, "chain", ltext, err)) << err;
     delve::LayoutData ld;
     EXPECT_TRUE(delve::read_layout_json(ltext, ld, err)) << err;
+    return ld;
+}
+
+delve::IrV2 buildChainIr(const delve::LayoutData& ld, delve::Project& p) {
     delve::IrV2 ir;
+    std::string err;
     EXPECT_TRUE(delve::build_ir_from_layout(ld, p, "chain", ir, err)) << err;
     return ir;
 }
+
+delve::IrV2 generateIr(delve::Project& p) { return buildChainIr(generateLayoutData(p), p); }
 
 TEST(DelveCheck, GenerateRectLevelEndToEnd) {
     delve::Project p = loadD2ChainProject();
@@ -567,6 +575,67 @@ TEST(DelveCheck, CorridorWidthChangeKeepsPassage) {
     const delve::FillResult fill3 = fillIr(ir3, q);
     std::vector<delve::CheckDiag> ds3;
     EXPECT_TRUE(delve::check_level(ir3, q, fill3, ds3)) << diagText(ds3);
+}
+
+// D3 acceptance (§11), refill mode: editing one room's fill parameter and
+// refilling at a frozen layout recomputes only the units whose input changed;
+// the other rooms' units come from the cache untouched.
+TEST(DelveCheck, RefillAfterRoomParamEditKeepsOthers) {
+    delve::Project p = loadD2ChainProject();
+    const delve::LayoutData ld = generateLayoutData(p);
+    const delve::IrV2 ir1 = buildChainIr(ld, p);
+
+    auto fillCached = [](const delve::IrV2& ir, const delve::Project& pr,
+                         delve::UnitCache& cache) {
+        delve::FillOpts opts;
+        opts.delve_assets = DELVE_ASSETS_DIR;
+        opts.cache = &cache;
+        delve::FillResult out;
+        std::string err;
+        EXPECT_TRUE(delve::fill_level(ir, pr, opts, out, err)) << err;
+        return out;
+    };
+    delve::UnitCache cache;
+    fillCached(ir1, p, cache);  // warm
+
+    // hall fill.h 3.5 -> 4.0 is a fill-tier edit: the layout stands, the IR
+    // is rebuilt from the same LayoutData with the edited project.
+    const std::string base = readFile(std::string(DELVE_TEST_DATA) + "/d2_project.json");
+    std::string text = surgery(base, ", \"wall_t\": 0.5", "");
+    text = surgery(text, "\"fill\": {\"h\": 3.5}", "\"fill\": {\"h\": 4.0}");
+    delve::Project q;
+    std::string err;
+    ASSERT_TRUE(loadText(text, q, err)) << err;
+    q.dir = std::filesystem::path(DELVE_ASSETS_DIR).parent_path().string();
+    const delve::IrV2 ir2 = buildChainIr(ld, q);
+    const delve::FillResult refill = fillCached(ir2, q, cache);
+
+    // Predicted recomputed set: the hall room unit; walls with a hall side;
+    // hall facings; nodes at a vertex incident to a hall wall (h_pillar and
+    // hall-looking faces bind heights). Doors bind door_h (unchanged); lamps
+    // bind no height (the mount height is a transform, reapplied at assembly
+    // even on a cache hit).
+    std::set<std::string> want{"room:hall"};
+    for (const auto& w : ir2.walls)
+        if (w.room_left == "hall" || w.room_right == "hall") want.insert(w.id);
+    for (const auto& f : ir2.facings)
+        if (f.room == "hall") want.insert(f.id);
+    for (const auto& n : ir2.nodes)
+        for (const auto& w : ir2.walls)
+            if ((w.g0 == n.at || w.g1 == n.at) &&
+                (w.room_left == "hall" || w.room_right == "hall"))
+                want.insert(n.id);
+    EXPECT_EQ(std::set<std::string>(refill.stats.reran.begin(), refill.stats.reran.end()),
+              want);
+    EXPECT_EQ(refill.stats.reran.size() + refill.stats.reused.size(), refill.units.size());
+    // Cache hits are invisible: the refill equals a cold run byte-for-byte...
+    delve::UnitCache cold;
+    const delve::FillResult fresh = fillCached(ir2, q, cold);
+    EXPECT_EQ(*refill.mesh->positions, *fresh.mesh->positions);
+    EXPECT_EQ(*refill.anchors->positions, *fresh.anchors->positions);
+    // ...and the edited level still passes the geometric checks.
+    std::vector<delve::CheckDiag> ds;
+    EXPECT_TRUE(delve::check_level(ir2, q, refill, ds)) << diagText(ds);
 }
 
 }  // namespace

@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -221,6 +222,233 @@ TEST(DelveFill, FillDeterministic) {
     }
     EXPECT_EQ(*a.mesh->positions, *b.mesh->positions);
     EXPECT_EQ(*a.anchors->positions, *b.anchors->positions);
+}
+
+// --- F8 unit cache -----------------------------------------------------------
+
+bool loadText(const std::string& text, delve::Project& p, std::string& err) {
+    const std::string path =
+        (std::filesystem::path(testing::TempDir()) / "d1_fill_probe.json").string();
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out << text;
+    out.close();
+    return delve::load_project(path, p, err);
+}
+
+std::string surgery(const std::string& text, const std::string& from, const std::string& to) {
+    const size_t first = text.find(from);
+    EXPECT_NE(first, std::string::npos) << "anchor missing: " << from;
+    EXPECT_EQ(text.find(from, first + 1), std::string::npos) << "anchor ambiguous: " << from;
+    std::string out = text;
+    out.replace(first, from.size(), to);
+    return out;
+}
+
+delve::FillResult fillCached(const delve::IrV2& ir, const delve::Project& p,
+                             delve::UnitCache& cache) {
+    delve::FillOpts opts;
+    opts.delve_assets = DELVE_ASSETS_DIR;
+    opts.cache = &cache;
+    delve::FillResult out;
+    std::string err;
+    EXPECT_TRUE(delve::fill_level(ir, p, opts, out, err)) << err;
+    return out;
+}
+
+std::set<std::string> asSet(const std::vector<std::string>& v) {
+    return {v.begin(), v.end()};
+}
+
+TEST(DelveFill, UnitKeyStableAndSensitive) {
+    const std::string assets = DELVE_ASSETS_DIR;
+    uint64_t ak = 0;
+    std::string err;
+    ASSERT_TRUE(delve::asset_content_key(assets + "/walls/facing_v1.pgg", {assets}, ak, err))
+        << err;
+    const std::vector<std::pair<std::string, pgg::Value>> bindings = {
+        {"h", pgg::Value(2.6f)}, {"style", pgg::Value(2)}, {"rng_seed", pgg::Value(42)}};
+    delve::UnitKey k1, k2;
+    ASSERT_TRUE(delve::unit_key("facing", ak, bindings, k1, err)) << err;
+    ASSERT_TRUE(delve::unit_key("facing", ak, bindings, k2, err)) << err;
+    EXPECT_EQ(k1, k2) << "same inputs must key equal";
+
+    auto rekey = [&](std::pair<std::string, pgg::Value> one, size_t at) {
+        std::vector<std::pair<std::string, pgg::Value>> b = bindings;
+        b[at].second = std::move(one.second);
+        delve::UnitKey k;
+        EXPECT_TRUE(delve::unit_key("facing", ak, b, k, err)) << err;
+        return k;
+    };
+    EXPECT_NE(k1, rekey({"", pgg::Value(2.6000001f)}, 0)) << "float bits must matter";
+    EXPECT_NE(k1, rekey({"", pgg::Value(3)}, 1)) << "int value must matter";
+    EXPECT_NE(k1, rekey({"", pgg::Value(43)}, 2)) << "rng_seed must matter";
+    delve::UnitKey otherSlot, otherAsset;
+    ASSERT_TRUE(delve::unit_key("node", ak, bindings, otherSlot, err)) << err;
+    EXPECT_NE(k1, otherSlot) << "slot kind must matter";
+    ASSERT_TRUE(delve::unit_key("facing", ak ^ 1, bindings, otherAsset, err)) << err;
+    EXPECT_NE(k1, otherAsset) << "asset content must matter";
+}
+
+TEST(DelveFill, AssetContentKeyCoversImports) {
+    const std::string tmp = testing::TempDir() + "/delve_cache_key";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    std::filesystem::copy(DELVE_ASSETS_DIR, tmp, std::filesystem::copy_options::recursive);
+    const std::string facing = tmp + "/walls/facing_v1.pgg";
+    std::string err;
+    uint64_t base = 0, touched = 0;
+    ASSERT_TRUE(delve::asset_content_key(facing, {tmp}, base, err)) << err;
+    {
+        std::ofstream f(facing, std::ios::app);
+        f << "# touch\n";
+    }
+    ASSERT_TRUE(delve::asset_content_key(facing, {tmp}, touched, err)) << err;
+    EXPECT_NE(base, touched) << "asset bytes must matter";
+    base = touched;
+    {
+        std::ofstream f(tmp + "/patterns.pgg", std::ios::app);
+        f << "# touch\n";
+    }
+    ASSERT_TRUE(delve::asset_content_key(facing, {tmp}, touched, err)) << err;
+    EXPECT_NE(base, touched) << "import closure bytes must matter (R-A7)";
+}
+
+TEST(DelveFill, CacheTransparent) {
+    delve::Project p = loadD1Project();
+    const delve::IrV2 ir = buildD1Ir(p);
+    delve::UnitCache cache;
+    const delve::FillResult warm = fillCached(ir, p, cache);
+    EXPECT_EQ(warm.stats.reran.size(), warm.units.size());
+    EXPECT_TRUE(warm.stats.reused.empty());
+    const delve::FillResult hot = fillCached(ir, p, cache);
+    EXPECT_EQ(hot.stats.reused.size(), hot.units.size());
+    EXPECT_TRUE(hot.stats.reran.empty());
+    // A cache hit must be invisible in the output (byte-level).
+    ASSERT_EQ(warm.mesh->pointCount(), hot.mesh->pointCount());
+    ASSERT_EQ(warm.anchors->pointCount(), hot.anchors->pointCount());
+    EXPECT_EQ(*warm.mesh->positions, *hot.mesh->positions);
+    EXPECT_EQ(*warm.anchors->positions, *hot.anchors->positions);
+}
+
+// Editing fill parameters must recompute exactly the units whose input
+// changed (F8 refill at a frozen IR; cheap empty assets, the assertion is on
+// the recomputed id set, not on geometry). The frozen level is hall-only, so
+// the edits are: "*" height (invalidates heights everywhere) and door_h
+// (invalidates doors, door-cut walls and door-cut facings only).
+TEST(DelveFill, CacheInvalidatesOnParamEdit) {
+    const std::string base = readFile(std::string(DELVE_TEST_DATA) + "/d1_project.json");
+    delve::Project p;
+    std::string err;
+    ASSERT_TRUE(loadText(base, p, err)) << err;
+    p.dir = std::filesystem::path(DELVE_ASSETS_DIR).parent_path().string();
+    p.asset_roots = {"src/tests/data/fill", "assets"};
+    p.slots["room_fill"] = "empty_room_fill.pgg";
+    p.slots["wall_body"] = "empty_wall_body.pgg";
+    p.slots["facing"] = "empty_facing.pgg";
+    p.slots["node"] = "empty_node.pgg";
+    p.slots["door"] = "empty_door.pgg";
+    p.slots["decor:lamp"] = "empty_decor.pgg";
+    const delve::IrV2 ir0 = buildD1Ir(p);
+
+    delve::UnitCache cache;
+    fillCached(ir0, p, cache);  // warm
+
+    auto editProject = [&](const std::string& text, delve::Project& out) {
+        ASSERT_TRUE(loadText(text, out, err)) << err;
+        out.dir = p.dir;
+        out.asset_roots = p.asset_roots;
+        out.slots = p.slots;
+    };
+
+    // Edit 1: "*" height 3.0 -> 3.1. Rooms, walls, facings and nodes bind
+    // heights; doors bind door_h and lamps bind no height: reused.
+    const std::string text1 = surgery(base, "\"*\": {\"h\": 3.0", "\"*\": {\"h\": 3.1");
+    delve::Project p1;
+    editProject(text1, p1);
+    const delve::IrV2 ir1 = buildD1Ir(p1);
+    const delve::FillResult refill1 = fillCached(ir1, p1, cache);
+    {
+        std::set<std::string> want;
+        for (const auto& r : ir1.rooms) want.insert("room:" + r.id);
+        for (const auto& w : ir1.walls) want.insert(w.id);
+        for (const auto& f : ir1.facings) want.insert(f.id);
+        for (const auto& n : ir1.nodes) want.insert(n.id);
+        EXPECT_EQ(asSet(refill1.stats.reran), want);
+        for (const std::string& id : refill1.stats.reused)
+            EXPECT_TRUE(id.rfind("door:", 0) == 0 || id.rfind("deco:", 0) == 0) << id;
+    }
+
+    // Edit 2 (on top of edit 1): door_h 2.2 -> 2.3. Only doors, walls with
+    // door cuts and facings with door cuts bind it.
+    delve::Project p2;
+    editProject(surgery(text1, "\"door_h\": 2.2", "\"door_h\": 2.3"), p2);
+    const delve::IrV2 ir2 = buildD1Ir(p2);
+    const delve::FillResult refill2 = fillCached(ir2, p2, cache);
+    {
+        std::set<std::string> want;
+        for (const auto& d : ir2.doors) want.insert(d.id);
+        for (const auto& w : ir2.walls)
+            if (!w.doors.empty()) want.insert(w.id);
+        for (const auto& f : ir2.facings)
+            if (!f.cuts.empty()) want.insert(f.id);
+        EXPECT_EQ(asSet(refill2.stats.reran), want);
+        EXPECT_EQ(refill2.stats.reran.size() + refill2.stats.reused.size(),
+                  refill2.units.size());
+    }
+
+    delve::UnitCache cold;
+    const delve::FillResult fresh = fillCached(ir2, p2, cold);
+    EXPECT_EQ(*refill2.mesh->positions, *fresh.mesh->positions);
+}
+
+// Editing an asset recomputes only its slot's units; editing an import
+// recomputes every dependent slot (R-A7). Real facing/node assets so the
+// import-closure assertions are meaningful.
+TEST(DelveFill, CacheInvalidatesOnAssetEdit) {
+    const std::string tmp = testing::TempDir() + "/delve_cache_assets";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    std::filesystem::copy(DELVE_ASSETS_DIR, tmp + "/assets",
+                          std::filesystem::copy_options::recursive);
+    const std::string data = std::string(DELVE_TEST_DATA) + "/fill";
+    for (const char* f : {"empty_room_fill.pgg", "empty_wall_body.pgg", "empty_door.pgg",
+                          "empty_decor.pgg"})
+        std::filesystem::copy_file(data + "/" + f, tmp + "/assets/" + f);
+
+    delve::Project p = loadD1Project();
+    p.dir = tmp;
+    p.slots["room_fill"] = "empty_room_fill.pgg";
+    p.slots["wall_body"] = "empty_wall_body.pgg";
+    p.slots["door"] = "empty_door.pgg";
+    p.slots["decor:lamp"] = "empty_decor.pgg";
+    const delve::IrV2 ir = buildD1Ir(p);
+    std::set<std::string> facIds, nodeIds;
+    for (const auto& f : ir.facings) facIds.insert(f.id);
+    for (const auto& n : ir.nodes) nodeIds.insert(n.id);
+
+    delve::UnitCache cache;
+    fillCached(ir, p, cache);  // warm
+
+    std::string err;
+    {
+        std::ofstream f(tmp + "/assets/walls/facing_v1.pgg", std::ios::app);
+        f << "# touch\n";
+    }
+    const delve::FillResult afterAsset = fillCached(ir, p, cache);
+    EXPECT_EQ(asSet(afterAsset.stats.reran), facIds) << "asset edit must hit only its slot";
+
+    {
+        std::ofstream f(tmp + "/assets/patterns.pgg", std::ios::app);
+        f << "# touch\n";
+    }
+    const delve::FillResult afterImport = fillCached(ir, p, cache);
+    std::set<std::string> want = facIds;
+    want.insert(nodeIds.begin(), nodeIds.end());
+    EXPECT_EQ(asSet(afterImport.stats.reran), want) << "import edit must hit dependents (R-A7)";
+
+    delve::UnitCache cold;
+    const delve::FillResult fresh = fillCached(ir, p, cold);
+    EXPECT_EQ(*afterImport.mesh->positions, *fresh.mesh->positions);
 }
 
 // A rotated facing (wall along Z) filled through F6 (local frame + assembly)
