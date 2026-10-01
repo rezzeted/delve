@@ -22,6 +22,11 @@ def ST_MORTAR() -> (out: int) {
     out = 4
 }
 
+def ST_SANDSTONE() -> (out: int) {
+    """sandstone finish (codes.pgg)."""
+    out = 5
+}
+
 def RL_HALL() -> (out: int) {
     """hall role (codes.pgg)."""
     out = 1
@@ -89,10 +94,10 @@ def ZP_CHASE() -> (out: int) {
 
 def style_color(style: int) -> (out: vec3) {
     """Face color of a finished style. Unknown codes come out magenta (fail-loud)."""
-    out = style == ST_STONE() ? vec3(0.62, 0.60, 0.57) : (style == ST_BRICK() ? vec3(0.58, 0.30, 0.22) : (style == ST_PLAIN() ? vec3(0.75, 0.73, 0.70) : (style == ST_MORTAR() ? vec3(0.52, 0.50, 0.47) : vec3(1.0, 0.0, 1.0))))
+    out = style == ST_STONE() ? vec3(0.62, 0.60, 0.57) : (style == ST_BRICK() ? vec3(0.58, 0.30, 0.22) : (style == ST_PLAIN() ? vec3(0.75, 0.73, 0.70) : (style == ST_MORTAR() ? vec3(0.52, 0.50, 0.47) : (style == ST_SANDSTONE() ? vec3(0.76, 0.70, 0.55) : vec3(1.0, 0.0, 1.0)))))
 }
 
 def style_color_mortar(style: int) -> (out: vec3) {
     """Mortar-core color behind facing gaps (slots §3): grayed variant of the style."""
-    out = style == ST_STONE() ? vec3(0.45, 0.43, 0.40) : (style == ST_BRICK() ? vec3(0.42, 0.36, 0.32) : (style == ST_PLAIN() ? vec3(0.55, 0.53, 0.50) : (style == ST_MORTAR() ? vec3(0.50, 0.48, 0.45) : vec3(1.0, 0.0, 1.0))))
+    out = style == ST_STONE() ? vec3(0.45, 0.43, 0.40) : (style == ST_BRICK() ? vec3(0.42, 0.36, 0.32) : (style == ST_PLAIN() ? vec3(0.55, 0.53, 0.50) : (style == ST_MORTAR() ? vec3(0.50, 0.48, 0.45) : (style == ST_SANDSTONE() ? vec3(0.58, 0.54, 0.44) : vec3(1.0, 0.0, 1.0)))))
 }

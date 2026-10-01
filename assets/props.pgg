@@ -1,0 +1,38 @@
+# Delve asset library: small props, boxes only (delve asset style).
+# Decor rule: everything here is @style 0 (opening-void legal). The F11
+# elements check still applies in full: keep same-normal faces of neighbour
+# parts off shared planes (exact convex overlap is measured, not bboxes).
+
+def barrel(rng: rng) -> (out: geo<mesh>) {
+    """Standing barrel ~0.78 m tall, r <= 0.32: 12 three-part staves with a
+    belly, 3 iron hoops, octagonal lid. Per-stave @tint jitter."""
+    n = 12
+    # Stave/hoop widths: w = 2 r tan(pi/n) at the INNER radius, so neighbour
+    # corners meet exactly (a sin-based chord leaves a >1e-6 m2 overlap).
+    a = 3.14159265 / f32(n)
+    w_end = 2.0 * 0.225 * sin(a) / cos(a)
+    w_mid = 2.0 * 0.275 * sin(a) / cos(a)
+    w_hoop = 2.0 * 0.240 * sin(a) / cos(a)
+    w_hoop2 = 2.0 * 0.290 * sin(a) / cos(a)
+    b_lo = transform(box(size = vec3(w_end, 0.25, 0.03), res = 1), translate = vec3(0, 0.125, 0.24))
+    b_mid = transform(box(size = vec3(w_mid, 0.25, 0.03), res = 1), translate = vec3(0, 0.375, 0.29))
+    b_hi = transform(box(size = vec3(w_end, 0.25, 0.03), res = 1), translate = vec3(0, 0.625, 0.24))
+    stave = merge(b_lo, b_mid, b_hi)
+    h1 = transform(box(size = vec3(w_hoop, 0.045, 0.024), res = 1), translate = vec3(0, 0.09, 0.252))
+    h2 = transform(box(size = vec3(w_hoop2, 0.045, 0.024), res = 1), translate = vec3(0, 0.375, 0.302))
+    h3 = transform(box(size = vec3(w_hoop, 0.045, 0.024), res = 1), translate = vec3(0, 0.66, 0.252))
+    hoop = merge(h1, h2, h3)
+    ring0 = transform(circle(sides = n, radius = 1.0), rotate = vec3(90, 0, 0))
+    ring1 = set(ring0, "orient", orient_from_euler(vec3(0, degrees(atan2(dot(@P, (1, 0, 0)), dot(@P, (0, 0, 1)))), 0)))
+    ring2 = set_position(ring1, offset = vec3(0, 0, 0) - @P)
+    shade = random(lo = 0.86, hi = 1.14, rng = split_rng(rng, key = "tint"))
+    pts = set(ring2, "tint", vec3(shade, shade, shade))
+    staves = realize(instance_on_points(pts, source = stave))
+    hoops = realize(instance_on_points(pts, source = hoop))
+    lid0 = box(size = vec3(0.33, 0.025, 0.33), res = 1)
+    lid = transform(lid0, translate = vec3(0, 0.7625, 0))
+    wood = set(staves, "Cd", vec3(0.42, 0.30, 0.18) * @tint, domain = points)
+    lidc = set(lid, "Cd", vec3(0.47, 0.34, 0.20), domain = points)
+    iron = set(hoops, "Cd", vec3(0.16, 0.15, 0.14), domain = points)
+    out = set(merge(wood, lidc, iron), "style", 0, domain = points)
+}

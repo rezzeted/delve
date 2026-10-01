@@ -1,0 +1,113 @@
+# Delve slot asset: room_fill v2 (slots §2.1). Stone-tile floor with accent
+# patterns (medallion / border / cross, rng-picked), optional ceiling
+# (style_ceil == 0 skips it: no-roof iso rooms), barrel cluster for
+# halls/crypts. Light anchor only with a ceiling; spawn for halls.
+# v2 keeps the v1 RECT-only limit (tiles follow the bbox grid).
+
+import codes as c
+import props
+
+def slot_version() -> (out: int) {
+    out = 1
+}
+
+param contour: geo<points>
+param h: f32 = 3.0
+param role: int = 1
+param style_floor: int = 1
+param style_ceil: int = 3
+param rng_seed: int = 7
+
+
+lo, hi = bbox(contour)
+sx = dot(hi - lo, (1, 0, 0))
+sz = dot(hi - lo, (0, 0, 1))
+cx = (dot(lo, (1, 0, 0)) + dot(hi, (1, 0, 0))) * 0.5
+cz = (dot(lo, (0, 0, 1)) + dot(hi, (0, 0, 1))) * 0.5
+
+root = rng_from_seed(rng_seed)
+pat_rng = split_rng(root, key = "pattern")
+bar_rng = split_rng(root, key = "barrels")
+variant = value(random_int(4, rng = pat_rng), on = mesh_line(count = 1, length = 0.0))
+
+# Mortar bed under the tiles; its top sits 0.5 mm below the tile bottoms.
+bed = transform(box(size = vec3(sx, 0.16, sz), res = 1), translate = vec3(cx, 0.0 - 0.1205, cz))
+bed_s = set(bed, "style", style_floor, domain = points)
+bed_mesh = set(bed_s, "Cd", c.style_color_mortar(style = style_floor), domain = points)
+
+pitch = 0.5
+tile = 0.46
+nx = int(floor(sx / pitch))
+nz = int(floor(sz / pitch))
+ox = cx - f32(nx) * pitch * 0.5
+oz = cz - f32(nz) * pitch * 0.5
+base_col = c.style_color(style = style_floor)
+accent_col = c.style_color(style = c.ST_BRICK())
+
+tiles = repeat (empty_mesh(), iterations = nx * nz) |acc| {
+    e = @iteration
+    i = e % nx
+    j = e / nx
+    tx = ox + (f32(i) + 0.5) * pitch
+    tz = oz + (f32(j) + 0.5) * pitch
+    dxc = tx - cx
+    dzc = tz - cz
+    dc = sqrt(dxc * dxc + dzc * dzc)
+    edge = min(min(tx - ox, ox + f32(nx) * pitch - tx), min(tz - oz, oz + f32(nz) * pitch - tz))
+    a_med = dc < min(sx, sz) * 0.25
+    a_bord = edge < pitch
+    a_cross = (sqrt(dxc * dxc) < pitch * 0.75) | (sqrt(dzc * dzc) < pitch * 0.75)
+    accent = variant == 1 ? a_med : (variant == 2 ? a_bord : (variant == 3 ? a_cross : false))
+    tb = box(size = vec3(tile, 0.04, tile), res = 1)
+    tm = transform(tb, translate = vec3(tx, 0.0 - 0.02, tz))
+    ti = set(tm, "id", e, domain = points)
+    ts = set(ti, "style", style_floor, domain = points)
+    tc = set(ts, "Cd", accent ? accent_col : base_col, domain = points)
+    acc = merge(acc, tc)
+}
+
+hv = sin(f32(@id) * 12.9898) * 43758.5453
+jit = 0.94 + (hv - floor(hv)) * 0.12
+tiles_c = set(tiles, "Cd", @Cd * jit, domain = points)
+
+ceil_bare = transform(box(size = vec3(sx, 0.2, sz), res = 1), translate = vec3(cx, h + 0.1, cz))
+ceil_s = set(ceil_bare, "style", style_ceil, domain = points)
+ceil_mesh = set(ceil_s, "Cd", c.style_color(style = style_ceil), domain = points)
+ceil_part = select(style_ceil != 0, a = ceil_mesh, b = empty_mesh())
+
+# Barrel cluster in an rng-picked corner (halls/crypts): L-shaped pile of up
+# to 3, centers 0.5 m off the walls, 0.78 m apart along them.
+is_store = (role == c.RL_HALL()) | (role == c.RL_CRYPT())
+nb = 1 + value(random_int(3, rng = bar_rng), on = mesh_line(count = 1, length = 0.0))
+csel = value(random_int(4, rng = split_rng(bar_rng, key = "corner")), on = mesh_line(count = 1, length = 0.0))
+sxn = csel % 2 == 0 ? 1.0 : 0.0 - 1.0
+szn = csel < 2 ? 1.0 : 0.0 - 1.0
+corner_x = sxn > 0.0 ? dot(hi, (1, 0, 0)) : dot(lo, (1, 0, 0))
+corner_z = szn > 0.0 ? dot(hi, (0, 0, 1)) : dot(lo, (0, 0, 1))
+b0 = props.barrel(rng = bar_rng)
+barrels = repeat (empty_mesh(), iterations = nb) |acc| {
+    k = @iteration
+    ax = 0.62 + 0.78 * (k == 1 ? 1.0 : 0.0)
+    az = 0.62 + 0.78 * (k == 2 ? 1.0 : 0.0)
+    yaw = f32((k * 53 + csel * 17) % 360)
+    bm = transform(b0, rotate = vec3(0.0, yaw, 0.0), translate = vec3(corner_x - sxn * ax, 0.0, corner_z - szn * az))
+    acc = merge(acc, bm)
+}
+barrel_part = select(is_store, a = barrels, b = empty_mesh())
+
+mesh = merge(bed_mesh, tiles_c, ceil_part, barrel_part)
+
+lamp0 = transform(mesh_line(count = 1, length = 0.0), translate = vec3(cx, h - 0.3, cz))
+lamp1 = set(lamp0, "kind", c.AK_LIGHT(), domain = points)
+lamp2 = set(lamp1, "dir", vec3(0.0, 0.0 - 1.0, 0.0), domain = points, typeinfo = vector)
+lamp = set(lamp2, "range", 6.0, domain = points)
+
+spawn0 = transform(mesh_line(count = 1, length = 0.0), translate = vec3(cx, 0.0, cz))
+spawn1 = set(spawn0, "kind", c.AK_SPAWN(), domain = points)
+spawn2 = set(spawn1, "dir", vec3(0.0, 0.0, 1.0), domain = points, typeinfo = vector)
+spawn = set(spawn2, "range", 0.0, domain = points)
+
+anchors = merge(select(style_ceil != 0, a = lamp, b = empty_points()), select(role == c.RL_HALL(), a = spawn, b = empty_points()))
+
+output mesh
+output anchors

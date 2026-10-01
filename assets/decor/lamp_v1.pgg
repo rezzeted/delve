@@ -1,5 +1,8 @@
 # Delve slot asset: decor lamp v1 (slots §2.6). Fixture + exactly one light anchor.
-# Mount-agnostic: the fixture hangs along the mount normal @n (ceiling or wall).
+# Mount follows the anchor normal @n: ceiling hang (|n.y| ~ 1) or wall torch
+# (axis-aligned wall, n horizontal). Boxes stay axis-aligned; the wall variant
+# picks its long axis from n and keeps same-normal faces off shared planes
+# (F11 elements: coplanar stem/shade faces are double geometry).
 
 import codes as c
 
@@ -18,17 +21,34 @@ jit_rng = split_rng(root, key = "jitter")
 
 at = value(@P, on = p)
 mn = normalize(value(@n, on = p))
+wall = abs(dot(mn, (0, 1, 0))) < 0.5
+along_x = abs(dot(mn, (1, 0, 0))) > 0.5
 
-stem = transform(box(size = vec3(0.06, 0.18, 0.06), res = 1), translate = at + mn * 0.09)
-shade = transform(box(size = vec3(0.34, 0.10, 0.34), res = 1), translate = at + mn * 0.23)
-bulb = transform(box(size = vec3(0.12, 0.10, 0.12), res = 1), translate = at + mn * 0.30)
-metal_s = set(merge(stem, shade), "style", style, domain = points)
-metal = set(metal_s, "Cd", c.style_color(style = style) * 0.6, domain = points)
-glow_s = set(bulb, "style", style, domain = points)
+# Ceiling hang: stem, wide shade, bulb below; stacked boxes touch with
+# opposite normals only.
+c_stem = transform(box(size = vec3(0.06, 0.18, 0.06), res = 1), translate = at + mn * 0.09)
+c_shade = transform(box(size = vec3(0.34, 0.10, 0.34), res = 1), translate = at + mn * 0.23)
+c_bulb = transform(box(size = vec3(0.12, 0.10, 0.12), res = 1), translate = at + mn * 0.30)
+
+# Wall torch: bracket out of the wall, cup on its end, flame above the cup.
+bs = along_x ? vec3(0.30, 0.05, 0.05) : vec3(0.05, 0.05, 0.30)
+w_bracket = transform(box(size = bs, res = 1), translate = at + mn * 0.15)
+w_cup = transform(box(size = vec3(0.14, 0.16, 0.14), res = 1), translate = at + mn * 0.33 + vec3(0.0, 0.05, 0.0))
+w_flame = transform(box(size = vec3(0.10, 0.10, 0.10), res = 1), translate = at + mn * 0.33 + vec3(0.0, 0.18, 0.0))
+
+metal = select(wall, a = merge(w_bracket, w_cup), b = merge(c_stem, c_shade))
+glow_b = select(wall, a = w_flame, b = c_bulb)
+wd = wall ? 0.33 : 0.30
+wy = wall ? 0.18 : 0.0
+light_at = at + mn * wd + vec3(0.0, wy, 0.0)
+
+metal_s = set(metal, "style", style, domain = points)
+metal_c = set(metal_s, "Cd", c.style_color(style = style) * 0.6, domain = points)
+glow_s = set(glow_b, "style", style, domain = points)
 glow = set(glow_s, "Cd", vec3(1.0, 0.9, 0.7), domain = points)
-mesh = set(merge(metal, glow), "Cd", @Cd * (0.96 + random(0.0, 0.08, rng = jit_rng)), domain = points)
+mesh = set(merge(metal_c, glow), "Cd", @Cd * (0.96 + random(0.0, 0.08, rng = jit_rng)), domain = points)
 
-a0 = transform(mesh_line(count = 1, length = 0.0), translate = at + mn * 0.30)
+a0 = transform(mesh_line(count = 1, length = 0.0), translate = light_at)
 a1 = set(a0, "kind", c.AK_LIGHT(), domain = points)
 a2 = set(a1, "dir", mn, domain = points, typeinfo = vector)
 anchors = set(a2, "range", 6.0, domain = points)

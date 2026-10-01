@@ -64,6 +64,7 @@ struct FillParams {
     double door_h = 2.2;
     double frame = 0.15;
     double lamp_step = 4.0;
+    std::string lamp_place = "ceil";  // ceil | wall (F6 lamp placement mode)
     double row_module = 0.25;
     std::map<std::string, RoleEntry> roles;  // "*" default + named roles
     TransitionDefaults transitions;
@@ -147,7 +148,7 @@ std::string side_rule_detail(const Project& project, int index);
 
 // Name -> int code tables. Values MUST match assets codes.pgg (parity test).
 // ok=false on unknown name.
-int style_code(const std::string& name, bool& ok);    // stone=1 brick=2 plain=3 mortar=4
+int style_code(const std::string& name, bool& ok);  // stone=1 .. mortar=4 sandstone=5 none=0
 int role_code(const std::string& name, bool& ok);     // hall=1 corridor=2 crypt=3 entry=4 stairs=5
 int pattern_code(const std::string& name, bool& ok);  // butt=0 chase=1
 int door_code(const std::string& name, bool& ok);     // open=1 gate=2

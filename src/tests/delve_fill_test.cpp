@@ -658,7 +658,8 @@ TEST(DelveFill, AssetVariants) {
     const auto* dir = vec3Col(anch, "dir");
     ASSERT_NE(dir, nullptr);
     EXPECT_EQ((*dir)[0], glm::vec3(1, 0, 0));
-    const glm::vec3 dp = (*anch->positions)[0] - glm::vec3(3.3f, 1.5f, 0.0f);
+    // Wall-mounted torch: light anchor at the flame (cup end + above it).
+    const glm::vec3 dp = (*anch->positions)[0] - glm::vec3(3.33f, 1.68f, 0.0f);
     EXPECT_LT(std::abs(dp.x) + std::abs(dp.y) + std::abs(dp.z), 1e-6f);
 }
 

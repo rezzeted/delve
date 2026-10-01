@@ -356,10 +356,10 @@ bool expandDoor(const IrDoor& d, int fill_seed, const std::string& asset, Unit& 
     return true;
 }
 
-// v1 lamp placement: centered inset grid over the room bbox, nx = max(1,
-// round(sx / step)) per axis, mount on the ceiling plane. Positions outside a
-// figured room's contour are skipped (rects: never triggers). Ids are
-// room-local (D3): deco:lamp:<room>:<k>.
+// v1 lamp placement, "ceil" mode: centered inset grid over the room bbox,
+// nx = max(1, round(sx / step)) per axis, mount on the ceiling plane.
+// Positions outside a figured room's contour are skipped (rects: never
+// triggers). Ids are room-local (D3): deco:lamp:<room>:<k>.
 bool pointInRoomGrid(const IrRoom& r, double cell, double x, double z) {
     bool inside = false;
     const size_t n = r.grid.size();
@@ -371,8 +371,69 @@ bool pointInRoomGrid(const IrRoom& r, double cell, double x, double z) {
     return inside;
 }
 
-bool expandLamps(const IrRoom& r, double cell, double step, int fill_seed,
-                 const std::string& asset, std::vector<Unit>& units, std::string& err) {
+// "wall" mode (sconces): walk the room's facings (wall faces already offset
+// into the room, normal points inside). Positions run along each facing with
+// a 0.5 m end inset and `step` spacing, y = min(1.9, h - 0.5), @n = inward
+// horizontal normal, mount point 0.08 m off the wall face. Positions within
+// 0.4 m of a door cut are skipped. Style = the room's wall style.
+bool expandLampsWall(const IrRoom& r, const IrV2& ir, double step, int fill_seed,
+                     const std::string& asset, int& k, std::vector<Unit>& units,
+                     std::string& err) {
+    bool ok = false;
+    const int style = style_code(r.style, ok);
+    if (!ok) {
+        err = "delve/run [room:" + r.id + "]: unknown style '" + r.style + "'";
+        return false;
+    }
+    const double y = std::min(1.9, r.h - 0.5);
+    for (const auto& f : ir.facings) {
+        if (f.room != r.id) continue;
+        const double dx = f.to.first - f.from.first, dz = f.to.second - f.from.second;
+        const double len = std::hypot(dx, dz);
+        if (!(len > 1.0)) continue;  // corner sliver: no lamp
+        const double ux = dx / len, uz = dz / len;
+        const double inset = 0.5;
+        const double usable = len - 2 * inset;
+        const int cnt = std::max(1, (int)std::floor(usable / step) + 1);
+        for (int i = 0; i < cnt; ++i) {
+            const double s = inset + usable * (i + 0.5) / cnt;
+            bool blocked = false;
+            for (const auto& c : f.cuts) {
+                const double ca = (c.a.first - f.from.first) * ux + (c.a.second - f.from.second) * uz;
+                const double cb = (c.b.first - f.from.first) * ux + (c.b.second - f.from.second) * uz;
+                if (s > std::min(ca, cb) - 0.4 && s < std::max(ca, cb) + 0.4) {
+                    blocked = true;
+                    break;
+                }
+            }
+            if (blocked) continue;
+            Unit u;
+            u.id = "deco:lamp:" + r.id + ":" + std::to_string(k++);
+            u.slot = "decor:lamp";
+            u.asset = asset;
+            PointsBuilder p;
+            p.pt(0, 0, 0);
+            p.vec3("n", f.n.first, 0, f.n.second);
+            pgg::GeoPtr pGeo = p.build(err);
+            if (!pGeo) return false;
+            u.bindings = {{"p", pgg::Value(pGeo)},
+                          {"style", pgg::Value(style)},
+                          {"tag", pgg::Value(1)},
+                          {"rng_seed", pgg::Value(unit_seed(fill_seed, u.id))}};
+            u.tx = f.from.first + ux * s + f.n.first * 0.08;
+            u.ty = y;
+            u.tz = f.from.second + uz * s + f.n.second * 0.08;
+            units.push_back(std::move(u));
+        }
+    }
+    return true;
+}
+
+bool expandLamps(const IrRoom& r, const IrV2& ir, double cell, double step,
+                 const std::string& place, int fill_seed, const std::string& asset,
+                 std::vector<Unit>& units, std::string& err) {
+    int k = 0;
+    if (place == "wall") return expandLampsWall(r, ir, step, fill_seed, asset, k, units, err);
     double x0 = 1e300, x1 = -1e300, z0 = 1e300, z1 = -1e300;
     for (const auto& [gx, gy] : r.grid) {
         x0 = std::min(x0, gx * cell);
@@ -389,7 +450,6 @@ bool expandLamps(const IrRoom& r, double cell, double step, int fill_seed,
               "'";
         return false;
     }
-    int k = 0;
     for (int i = 0; i < nx; ++i)
         for (int j = 0; j < nz; ++j) {
             const double lx = x0 + (x1 - x0) * (i + 0.5) / nx;
@@ -839,8 +899,8 @@ bool fill_level(const IrV2& ir, const Project& project, const FillOpts& opts, Fi
         units.push_back(std::move(u));
     }
     for (const auto& r : ir.rooms) {
-        if (!expandLamps(r, project.fill.cell, project.fill.lamp_step, fseed,
-                         assets["decor:lamp"], units, err))
+        if (!expandLamps(r, ir, project.fill.cell, project.fill.lamp_step,
+                         project.fill.lamp_place, fseed, assets["decor:lamp"], units, err))
             return false;
     }
 

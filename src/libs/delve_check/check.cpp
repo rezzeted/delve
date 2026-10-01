@@ -129,9 +129,11 @@ std::vector<Element> groupFaces(const pgg::GeoPtr& mesh, size_t begin, size_t en
     return out;
 }
 
-// Coplanar same-normal 2D overlap area of two faces (rects in v1: bbox exact).
-// > 0 means duplicate surface (z-fighting); touching boxes have opposite
-// normals and never match.
+// Coplanar same-normal 2D overlap area of two faces: exact convex clip
+// (Sutherland-Hodgman) in the face plane. > 0 means duplicate surface
+// (z-fighting); touching boxes have opposite normals and never match. A bbox
+// test is not enough: rotated rects (e.g. yaw-spun props) touch at a corner
+// yet their 2D bboxes overlap by ~1e-4 m2, a false "double".
 double doubleArea(const FaceInfo& a, const FaceInfo& b, const std::vector<glm::vec3>& pos) {
     const double la = glm::length(a.n), lb = glm::length(b.n);
     if (la < 1e-12 || lb < 1e-12) return 0;
@@ -142,21 +144,54 @@ double doubleArea(const FaceInfo& a, const FaceInfo& b, const std::vector<glm::v
     const glm::vec3 ref = std::abs(un.x) < 0.9 ? glm::vec3(1, 0, 0) : glm::vec3(0, 1, 0);
     const glm::vec3 e0 = glm::normalize(glm::cross(un, ref));
     const glm::vec3 e1 = glm::cross(un, e0);
-    auto bbox = [&](const FaceInfo& f) {
-        double x0 = 1e300, x1 = -1e300, y0 = 1e300, y1 = -1e300;
+    auto project = [&](const FaceInfo& f) {
+        std::vector<glm::dvec2> out;
+        out.reserve(f.pts.size());
         for (int pi : f.pts) {
-            const glm::vec3 d = pos[pi] - a.c;
-            const double x = glm::dot(d, e0), y = glm::dot(d, e1);
-            x0 = std::min(x0, x);
-            x1 = std::max(x1, x);
-            y0 = std::min(y0, y);
-            y1 = std::max(y1, y);
+            const glm::dvec3 d = glm::dvec3(pos[pi]) - glm::dvec3(a.c);
+            out.emplace_back(glm::dot(d, glm::dvec3(e0)), glm::dot(d, glm::dvec3(e1)));
         }
-        return std::array<double, 4>{x0, x1, y0, y1};
+        return out;
     };
-    const auto ba = bbox(a), bb = bbox(b);
-    return std::max(0.0, std::min(ba[1], bb[1]) - std::max(ba[0], bb[0])) *
-           std::max(0.0, std::min(ba[3], bb[3]) - std::max(ba[2], bb[2]));
+    const std::vector<glm::dvec2> pa = project(a);
+    const std::vector<glm::dvec2> pb = project(b);
+    double bArea2 = 0;  // signed area x2: winding sign for the inside test
+    for (size_t i = 0; i < pb.size(); ++i) {
+        const glm::dvec2& p = pb[i];
+        const glm::dvec2& q = pb[(i + 1) % pb.size()];
+        bArea2 += p.x * q.y - q.x * p.y;
+    }
+    if (std::abs(bArea2) < 1e-12) return 0;
+    const double wind = bArea2 > 0 ? 1.0 : -1.0;
+    // Clip a's polygon by b's edges (both convex for box/ngon faces).
+    std::vector<glm::dvec2> poly = pa;
+    for (size_t i = 0; i < pb.size() && poly.size() >= 3; ++i) {
+        const glm::dvec2 p = pb[i];
+        const glm::dvec2 q = pb[(i + 1) % pb.size()];
+        const glm::dvec2 edge = q - p;
+        auto side = [&](const glm::dvec2& r) {
+            return wind * (edge.x * (r.y - p.y) - edge.y * (r.x - p.x));
+        };
+        std::vector<glm::dvec2> next;
+        for (size_t j = 0; j < poly.size(); ++j) {
+            const glm::dvec2 s = poly[j];
+            const glm::dvec2 t = poly[(j + 1) % poly.size()];
+            const double ss = side(s), st = side(t);
+            if (ss >= 0) next.push_back(s);
+            if ((ss >= 0) != (st >= 0)) {
+                const double k = ss / (ss - st);
+                next.emplace_back(s.x + (t.x - s.x) * k, s.y + (t.y - s.y) * k);
+            }
+        }
+        poly = std::move(next);
+    }
+    double area2 = 0;
+    for (size_t i = 0; i < poly.size(); ++i) {
+        const glm::dvec2& p = poly[i];
+        const glm::dvec2& q = poly[(i + 1) % poly.size()];
+        area2 += p.x * q.y - q.x * p.y;
+    }
+    return std::abs(area2) * 0.5;
 }
 
 // Zone boundary (slots §3) at the element's course.

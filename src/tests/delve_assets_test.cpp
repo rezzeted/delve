@@ -75,6 +75,7 @@ TEST(DelveAssets, AutonomyRA4) {
     const std::string assets = DELVE_ASSETS_DIR;
     const std::vector<AssetCase> cases = {
         {"rooms/fill_v1.pgg", "rooms/fill_v1.fixture.json", 2},
+        {"rooms/fill_v2.pgg", "rooms/fill_v2.fixture.json", 1},
         {"walls/body_v1.pgg", "walls/body_v1.fixture.json", 0},
         {"walls/facing_v1.pgg", "walls/facing_v1.fixture.json", 0},
         {"walls/node_v1.pgg", "walls/node_v1.fixture.json", 0},
@@ -129,6 +130,7 @@ TEST(DelveAssets, CodesParity) {
         {"ST", "brick", 2, delve::style_code},
         {"ST", "plain", 3, delve::style_code},
         {"ST", "mortar", 4, delve::style_code},
+        {"ST", "sandstone", 5, delve::style_code},
         {"RL", "hall", 1, delve::role_code},
         {"RL", "corridor", 2, delve::role_code},
         {"RL", "crypt", 3, delve::role_code},

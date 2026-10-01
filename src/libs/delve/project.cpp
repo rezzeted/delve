@@ -240,8 +240,8 @@ bool load_project(const std::string& path, Project& out, std::string& err) {
         for (const auto& [key, _] : f.items()) {
             if (key != "cell" && key != "wall_t" && key != "min_passage" && key != "min_opening" &&
                 key != "room_h" && key != "door_h" && key != "frame" && key != "lamp_step" &&
-                key != "row_module" && key != "roles" && key != "transitions" &&
-                key != "side_rules") {
+                key != "lamp_place" && key != "row_module" && key != "roles" &&
+                key != "transitions" && key != "side_rules") {
                 err = path + ": fill." + key + ": unknown key";
                 return false;
             }
@@ -254,8 +254,13 @@ bool load_project(const std::string& path, Project& out, std::string& err) {
             !get_num(f, "door_h", fp.door_h, err, "fill") ||
             !get_num(f, "frame", fp.frame, err, "fill") ||
             !get_num(f, "lamp_step", fp.lamp_step, err, "fill") ||
+            !get_str(f, "lamp_place", fp.lamp_place, err, "fill") ||
             !get_num(f, "row_module", fp.row_module, err, "fill"))
             return false;
+        if (fp.lamp_place != "ceil" && fp.lamp_place != "wall") {
+            err = path + ": fill.lamp_place: expected ceil|wall";
+            return false;
+        }
         if (f.contains("roles")) {
             const auto& roles = f["roles"];
             if (!roles.is_object()) {
@@ -668,6 +673,8 @@ int style_code(const std::string& name, bool& ok) {
     if (name == "brick") return 2;
     if (name == "plain") return 3;
     if (name == "mortar") return 4;
+    if (name == "sandstone") return 5;
+    if (name == "none") return 0;  // "no finish": room_fill may drop the element
     ok = false;
     return 0;
 }
