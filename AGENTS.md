@@ -13,8 +13,10 @@ Delve — оркестратор подземелий поверх `thirdparty/p
 заменяться только с согласия пользователя.
 
 Раскладка: `src/libs/delve` (проект/граф/IR), `src/libs/delve_layout` (F2/F3),
-`src/libs/delve_fill` (F6), `src/libs/delve_check` (F11), `src/libs/delve_d0` (D0,
-замороженный IR); тесты `src/tests/delve_*_test.cpp` + данные `src/tests/data`;
+`src/libs/delve_fill` (F6), `src/libs/delve_check` (F11), `src/libs/delve_export`
+(F7), `src/libs/delve_d0` (D0, замороженный IR); приложения `src/apps/DelveViewer`
+(F9) и `src/apps/DelveCli` (F10, машинная петля — см. `docs/cli_v1.md`); тесты
+`src/tests/delve_*_test.cpp` + данные `src/tests/data`;
 слот-ассеты `assets/`; доки `docs/`; демо-проекты `projects/` (превью в
 DelveViewer, см. `projects/demo/README.md`).
 
@@ -34,9 +36,12 @@ DelveViewer, см. `projects/demo/README.md`).
 ## Тестирование
 
 - Быстрые сьюты (секунды): `delve_ir_test`, `delve_project_test`,
-  `delve_layout_test`, `delve_d0_test`, `delve_assets_test` — запускать всегда.
+  `delve_layout_test`, `delve_d0_test`, `delve_assets_test`,
+  `delve_export_test` (~26 с, один frozen fill) — запускать всегда.
 - Smoke превью (F9): `DelveViewer_smoke_layout` (~3 с) и `DelveViewer_smoke_ir`
   (~18 с, frozen fill) — headless-прогоны пути данных DelveViewer в ctest.
+- Smoke машинной петли (F10): `DelveCli_smoke_validate/layout/export/check/
+  errors` (~25 с суммарно) — команды DelveCli, включая негативный путь D101.
 - Медленные (Debug + PGG, минуты — это норма, не зависание): `delve_fill_test`
   (~4 мин), `delve_check_test` (~1–2 мин без `DelveCheck.PassFrozen`; сам
   `PassFrozen` очень медленный — запускать отдельно на незагруженной машине).
