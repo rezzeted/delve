@@ -5,6 +5,7 @@
 
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -20,7 +21,22 @@ struct RoleEntry {
     std::string floor = "stone";
     std::string ceil = "plain";
     std::optional<double> wall_t;  // v1 only (role level); nullopt = project wall_t
+    // F12: keys explicitly present in THIS role entry's JSON object (a named
+    // entry's own keys only — values prefilled from "*" are not explicit).
+    // Drives the role steps of the provenance chains; empty for hand-built
+    // entries (treated as "no explicit fields").
+    std::set<std::string> set_fields;
 };
+
+// F12 (§4.2): one resolution step of a value's provenance chain. level:
+// default | project | role | template | room | side | passage. detail: level
+// subject (role name or "*", template name, room id, "side_rules[i] (keys)",
+// passage "a-b"); empty for default/project. value: rendered at this step.
+struct ProvStep {
+    std::string level, detail, value;
+};
+// Ascending from the lowest applicable level to the winner (last step).
+using ProvChain = std::vector<ProvStep>;
 
 struct TransitionDefaults {
     std::string pattern = "butt";
@@ -72,6 +88,14 @@ std::string room_role(bool corridor);
 // 4.2 hierarchy, v0 levels (project -> role). Returns the winning entry.
 RoleEntry resolve_role(const Project& project, const std::string& role);
 
+// F12: same with per-field provenance chains (default -> "*" -> role;
+// project for h when roles are empty and for wall_t without role steps).
+struct RoleProvenance {
+    RoleEntry entry;
+    std::map<std::string, ProvChain> prov;  // h, style, floor, ceil, wall_t
+};
+RoleProvenance resolve_role_prov(const Project& project, const std::string& role);
+
 // 4.2 side level (v0): facing style for a wall side. adjacent_role is ""
 // for outer sides. Last matching side_rule wins; no match -> role style.
 std::string resolve_side_style(const Project& project, const std::string& room_role, bool outer,
@@ -82,19 +106,42 @@ std::string resolve_side_style(const Project& project, const std::string& room_r
 std::string apply_side_rules(const Project& project, const std::string& base_style, bool outer,
                              const std::string& adjacent_role);
 
+// F12: same with the indices of the fired rules, in application order.
+struct SideResolution {
+    std::string style;
+    std::vector<int> fired;  // indices into project.fill.side_rules
+};
+SideResolution apply_side_rules_prov(const Project& project, const std::string& base_style,
+                                     bool outer, const std::string& adjacent_role);
+
 // 4.2 hierarchy, v1 levels (room -> template -> role -> project).
 struct ResolvedFill {
     double h = 3.0;
     double wall_t = 0.6;
     std::string style = "stone", floor = "stone", ceil = "plain";
+    // F12: per-field chains (role chain, then template and room steps when
+    // the corresponding FillOverride field is set). tmpl_name/room_id are
+    // the step details; empty detail falls back to "template"/"room".
+    std::map<std::string, ProvChain> prov;
 };
 ResolvedFill resolve_room_fill(const Project& project, const std::string& role,
                                const FillOverride* tmpl, const FillOverride* room);
+ResolvedFill resolve_room_fill(const Project& project, const std::string& role,
+                               const FillOverride* tmpl, const FillOverride* room,
+                               const std::string& tmpl_name, const std::string& room_id);
 
 // 5.6 seed split (v1): layout and fill sub-seeds. The v0 path keeps using
 // Project.seed as the fill seed directly.
 int layout_seed(int seed);
 int fill_seed_v1(int seed);
+
+// Diagnostic rendering (F12): the winner first, then what it overrides,
+// e.g. `4 <- room "hall" <- template "grand_hall" (3.5) <- role "hall" (3)`.
+std::string format_prov(const ProvChain& chain);
+
+// F12: detail for a side-level step, e.g.
+// `side_rules[1] (adjacent_role=corridor)`.
+std::string side_rule_detail(const Project& project, int index);
 
 // Name -> int code tables. Values MUST match assets codes.pgg (parity test).
 // ok=false on unknown name.

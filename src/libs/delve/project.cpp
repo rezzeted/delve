@@ -290,6 +290,7 @@ bool load_project(const std::string& path, Project& out, std::string& err) {
                         err = path + ": fill.roles." + name + "." + key + ": unknown key";
                         return false;
                     }
+                    re.set_fields.insert(key);  // F12: explicit on this level
                 }
                 const std::string where = "fill.roles." + name;
                 if (!get_num(entry, "h", re.h, err, where) ||
@@ -494,10 +495,70 @@ RoleEntry resolve_role(const Project& project, const std::string& role) {
     return out;
 }
 
-std::string apply_side_rules(const Project& project, const std::string& base_style, bool outer,
-                             const std::string& adjacent_role) {
-    std::string style = base_style;
-    for (const auto& rule : project.fill.side_rules) {
+namespace {
+
+std::string fmt_val(double v) {
+    std::ostringstream s;
+    s << v;
+    return s.str();
+}
+
+std::string field_val(const RoleEntry& e, const std::string& field) {
+    if (field == "h") return fmt_val(e.h);
+    if (field == "style") return e.style;
+    if (field == "floor") return e.floor;
+    if (field == "ceil") return e.ceil;
+    return e.wall_t ? fmt_val(*e.wall_t) : std::string();  // wall_t
+}
+
+// F12: role-level steps of one field's chain (default/project -> "*" -> role;
+// only levels where the field is explicit, set_fields tracked at load).
+ProvChain role_field_chain(const Project& project, const std::string& role,
+                           const std::string& field) {
+    ProvChain chain;
+    const auto& roles = project.fill.roles;
+    if (roles.empty()) {
+        if (field == "h")
+            chain.push_back({"project", "", fmt_val(project.fill.room_h)});
+        else if (field == "wall_t")
+            chain.push_back({"project", "", fmt_val(project.fill.wall_t)});
+        else
+            chain.push_back({"default", "", field_val(RoleEntry{}, field)});
+        return chain;
+    }
+    const auto star = roles.find("*");
+    if (star != roles.end() && star->second.set_fields.count(field))
+        chain.push_back({"role", "*", field_val(star->second, field)});
+    if (role != "*") {
+        const auto named = roles.find(role);
+        if (named != roles.end() && named->second.set_fields.count(field))
+            chain.push_back({"role", role, field_val(named->second, field)});
+    }
+    if (chain.empty()) {
+        if (field == "wall_t")
+            chain.push_back({"project", "", fmt_val(project.fill.wall_t)});
+        else
+            chain.push_back({"default", "", field_val(RoleEntry{}, field)});
+    }
+    return chain;
+}
+
+}  // namespace
+
+RoleProvenance resolve_role_prov(const Project& project, const std::string& role) {
+    RoleProvenance out;
+    out.entry = resolve_role(project, role);
+    for (const char* f : {"h", "style", "floor", "ceil", "wall_t"})
+        out.prov[f] = role_field_chain(project, role, f);
+    return out;
+}
+
+SideResolution apply_side_rules_prov(const Project& project, const std::string& base_style,
+                                     bool outer, const std::string& adjacent_role) {
+    SideResolution out;
+    out.style = base_style;
+    for (size_t i = 0; i < project.fill.side_rules.size(); ++i) {
+        const SideRule& rule = project.fill.side_rules[i];
         if (!rule.side.empty()) {
             const bool want_outer = rule.side == "outer";
             if (want_outer != outer) continue;
@@ -505,9 +566,15 @@ std::string apply_side_rules(const Project& project, const std::string& base_sty
         if (!rule.adjacent_role.empty()) {
             if (outer || rule.adjacent_role != adjacent_role) continue;
         }
-        style = rule.style;  // later rules win
+        out.style = rule.style;  // later rules win
+        out.fired.push_back(static_cast<int>(i));
     }
-    return style;
+    return out;
+}
+
+std::string apply_side_rules(const Project& project, const std::string& base_style, bool outer,
+                             const std::string& adjacent_role) {
+    return apply_side_rules_prov(project, base_style, outer, adjacent_role).style;
 }
 
 std::string resolve_side_style(const Project& project, const std::string& room_role, bool outer,
@@ -515,24 +582,72 @@ std::string resolve_side_style(const Project& project, const std::string& room_r
     return apply_side_rules(project, resolve_role(project, room_role).style, outer, adjacent_role);
 }
 
+std::string side_rule_detail(const Project& project, int index) {
+    std::string keys;
+    const SideRule& rule = project.fill.side_rules.at(static_cast<size_t>(index));
+    if (!rule.side.empty()) keys += "side=" + rule.side;
+    if (!rule.adjacent_role.empty()) {
+        if (!keys.empty()) keys += ", ";
+        keys += "adjacent_role=" + rule.adjacent_role;
+    }
+    return "side_rules[" + std::to_string(index) + "] (" + keys + ")";
+}
+
+std::string format_prov(const ProvChain& chain) {
+    if (chain.empty()) return "<no provenance>";
+    auto step_text = [](const ProvStep& s, bool winner) {
+        std::string t = s.level;
+        if (!s.detail.empty()) t += " \"" + s.detail + "\"";
+        if (!winner) t += " (" + s.value + ")";
+        return t;
+    };
+    std::string out = chain.back().value + " <- " + step_text(chain.back(), true);
+    for (size_t i = chain.size() - 1; i-- > 0;) out += " <- " + step_text(chain[i], false);
+    return out;
+}
+
+ResolvedFill resolve_room_fill(const Project& project, const std::string& role,
+                               const FillOverride* tmpl, const FillOverride* room,
+                               const std::string& tmpl_name, const std::string& room_id) {
+    ResolvedFill out;
+    const RoleProvenance base = resolve_role_prov(project, role);
+    out.h = base.entry.h;
+    out.style = base.entry.style;
+    out.floor = base.entry.floor;
+    out.ceil = base.entry.ceil;
+    out.wall_t = base.entry.wall_t.value_or(project.fill.wall_t);
+    out.prov = base.prov;
+    auto apply = [&](const FillOverride* o, const char* level, const std::string& detail) {
+        if (!o) return;
+        if (o->h) {
+            out.h = *o->h;
+            out.prov["h"].push_back({level, detail, fmt_val(out.h)});
+        }
+        if (o->wall_t) {
+            out.wall_t = *o->wall_t;
+            out.prov["wall_t"].push_back({level, detail, fmt_val(out.wall_t)});
+        }
+        if (o->style) {
+            out.style = *o->style;
+            out.prov["style"].push_back({level, detail, out.style});
+        }
+        if (o->floor) {
+            out.floor = *o->floor;
+            out.prov["floor"].push_back({level, detail, out.floor});
+        }
+        if (o->ceil) {
+            out.ceil = *o->ceil;
+            out.prov["ceil"].push_back({level, detail, out.ceil});
+        }
+    };
+    apply(tmpl, "template", tmpl_name);
+    apply(room, "room", room_id);
+    return out;
+}
+
 ResolvedFill resolve_room_fill(const Project& project, const std::string& role,
                                const FillOverride* tmpl, const FillOverride* room) {
-    ResolvedFill out;
-    const RoleEntry base = resolve_role(project, role);
-    out.h = base.h;
-    out.style = base.style;
-    out.floor = base.floor;
-    out.ceil = base.ceil;
-    out.wall_t = base.wall_t.value_or(project.fill.wall_t);
-    for (const FillOverride* o : {tmpl, room}) {
-        if (!o) continue;
-        if (o->h) out.h = *o->h;
-        if (o->wall_t) out.wall_t = *o->wall_t;
-        if (o->style) out.style = *o->style;
-        if (o->floor) out.floor = *o->floor;
-        if (o->ceil) out.ceil = *o->ceil;
-    }
-    return out;
+    return resolve_room_fill(project, role, tmpl, room, "", "");
 }
 
 bool is_style_name(const std::string& name) {

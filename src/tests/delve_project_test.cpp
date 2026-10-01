@@ -268,3 +268,127 @@ TEST(ProjectV1, RejectInvariant54) {
                                   "\"doors\": {\"manual\": [[[0, 0], [1, 0]]]}"),
                           p, err));
 }
+
+// --- F12 provenance (4.2 chains) ----------------------------------------------
+
+TEST(ProjectV1, RoleProvenanceLevels) {
+    const delve::Project p = loadFixture();
+    // corridor: h 2.6/style brick/floor brick/ceil plain/wall_t 0.5 over "*".
+    const delve::RoleProvenance c = delve::resolve_role_prov(p, "corridor");
+    ASSERT_EQ(c.prov.at("h").size(), 2u);
+    EXPECT_EQ(c.prov.at("h")[0].level, "role");
+    EXPECT_EQ(c.prov.at("h")[0].detail, "*");
+    EXPECT_EQ(c.prov.at("h")[0].value, "3");
+    EXPECT_EQ(c.prov.at("h")[1].detail, "corridor");
+    EXPECT_EQ(c.prov.at("h")[1].value, "2.6");
+    ASSERT_EQ(c.prov.at("wall_t").size(), 1u);  // "*" has no wall_t
+    EXPECT_EQ(c.prov.at("wall_t")[0].detail, "corridor");
+    EXPECT_EQ(c.prov.at("wall_t")[0].value, "0.5");
+    // entry: only "*" applies; wall_t falls to the project level.
+    const delve::RoleProvenance e = delve::resolve_role_prov(p, "entry");
+    ASSERT_EQ(e.prov.at("h").size(), 1u);
+    EXPECT_EQ(e.prov.at("h")[0].detail, "*");
+    ASSERT_EQ(e.prov.at("wall_t").size(), 1u);
+    EXPECT_EQ(e.prov.at("wall_t")[0].level, "project");
+    EXPECT_EQ(e.prov.at("wall_t")[0].value, "0.6");
+    // A role nobody configured resolves from defaults only.
+    const delve::RoleProvenance x = delve::resolve_role_prov(p, "crypt");
+    ASSERT_EQ(x.prov.at("style").size(), 1u);
+    EXPECT_EQ(x.prov.at("style")[0].level, "role");  // "*" sets style
+    EXPECT_EQ(x.prov.at("style")[0].detail, "*");
+    ASSERT_EQ(x.prov.at("h").size(), 1u);
+    EXPECT_EQ(x.prov.at("h")[0].detail, "*");
+}
+
+TEST(ProjectV1, RoleProvenanceDefaultsAndProject) {
+    delve::Project p;  // hand-built: no roles at all
+    p.fill.room_h = 2.9;
+    p.fill.wall_t = 0.7;
+    const delve::RoleProvenance r = delve::resolve_role_prov(p, "hall");
+    ASSERT_EQ(r.prov.at("h").size(), 1u);
+    EXPECT_EQ(r.prov.at("h")[0].level, "project");
+    EXPECT_EQ(r.prov.at("h")[0].value, "2.9");
+    ASSERT_EQ(r.prov.at("wall_t").size(), 1u);
+    EXPECT_EQ(r.prov.at("wall_t")[0].level, "project");
+    EXPECT_EQ(r.prov.at("wall_t")[0].value, "0.7");
+    ASSERT_EQ(r.prov.at("style").size(), 1u);
+    EXPECT_EQ(r.prov.at("style")[0].level, "default");
+    EXPECT_EQ(r.prov.at("style")[0].value, "stone");
+}
+
+TEST(ProjectV1, RoomFillProvenance) {
+    const delve::Project p = loadFixture();
+    const delve::LayoutParams& l = *p.layout;
+    const delve::FillOverride* tmpl = &l.templates[0].fill;  // style brick
+    const delve::FillOverride* room = &l.rooms[1].fill;      // h 3.5 (hall)
+    const delve::ResolvedFill r =
+        delve::resolve_room_fill(p, "hall", tmpl, room, "grand_hall", "hall");
+    ASSERT_EQ(r.prov.at("h").size(), 2u);
+    EXPECT_EQ(r.prov.at("h")[0].level, "role");
+    EXPECT_EQ(r.prov.at("h")[0].detail, "*");
+    EXPECT_EQ(r.prov.at("h")[1].level, "room");
+    EXPECT_EQ(r.prov.at("h")[1].detail, "hall");
+    EXPECT_EQ(r.prov.at("h")[1].value, "3.5");
+    ASSERT_EQ(r.prov.at("style").size(), 2u);
+    EXPECT_EQ(r.prov.at("style")[1].level, "template");
+    EXPECT_EQ(r.prov.at("style")[1].detail, "grand_hall");
+    EXPECT_EQ(r.prov.at("style")[1].value, "brick");
+    ASSERT_EQ(r.prov.at("floor").size(), 1u);  // untouched by overrides
+    EXPECT_EQ(r.prov.at("floor")[0].level, "role");
+    // wall_t: no role/project override beyond the project default.
+    ASSERT_EQ(r.prov.at("wall_t").size(), 1u);
+    EXPECT_EQ(r.prov.at("wall_t")[0].level, "project");
+    // Room beats template on the same field, chain records both steps.
+    delve::FillOverride room_style;
+    room_style.style = "stone";
+    const delve::ResolvedFill s =
+        delve::resolve_room_fill(p, "hall", tmpl, &room_style, "grand_hall", "hall");
+    ASSERT_EQ(s.prov.at("style").size(), 3u);
+    EXPECT_EQ(s.prov.at("style")[1].level, "template");
+    EXPECT_EQ(s.prov.at("style")[2].level, "room");
+    EXPECT_EQ(s.prov.at("style")[2].value, "stone");
+}
+
+TEST(ProjectV1, SideRuleProvenance) {
+    const delve::Project p = loadFixture();
+    // Rules: [0] adjacent_role=corridor -> brick, [1] side=outer -> stone.
+    {
+        const delve::SideResolution r = delve::apply_side_rules_prov(p, "stone", true, "");
+        EXPECT_EQ(r.style, "stone");
+        EXPECT_EQ(r.fired, std::vector<int>{1});
+    }
+    {
+        const delve::SideResolution r = delve::apply_side_rules_prov(p, "stone", false, "corridor");
+        EXPECT_EQ(r.style, "brick");
+        EXPECT_EQ(r.fired, std::vector<int>{0});
+    }
+    {
+        const delve::SideResolution r = delve::apply_side_rules_prov(p, "brick", false, "hall");
+        EXPECT_EQ(r.style, "brick");
+        EXPECT_TRUE(r.fired.empty());
+    }
+    // Two matching rules: both fire in order, the later one wins.
+    delve::Project q = p;
+    delve::SideRule extra;
+    extra.side = "outer";
+    extra.style = "brick";
+    q.fill.side_rules.push_back(extra);  // [2]: outer -> brick (overrides [1])
+    const delve::SideResolution r = delve::apply_side_rules_prov(q, "stone", true, "");
+    EXPECT_EQ(r.style, "brick");
+    EXPECT_EQ(r.fired, (std::vector<int>{1, 2}));
+    EXPECT_EQ(delve::side_rule_detail(p, 0), "side_rules[0] (adjacent_role=corridor)");
+    EXPECT_EQ(delve::side_rule_detail(p, 1), "side_rules[1] (side=outer)");
+}
+
+TEST(ProjectV1, FormatProv) {
+    const delve::ProvChain chain = {{"default", "", "3"},
+                                    {"role", "hall", "3"},
+                                    {"template", "grand_hall", "3.5"},
+                                    {"room", "hall", "4"}};
+    EXPECT_EQ(delve::format_prov(chain),
+              "4 <- room \"hall\" <- template \"grand_hall\" (3.5) <- role \"hall\" (3) <- "
+              "default (3)");
+    EXPECT_EQ(delve::format_prov({}), "<no provenance>");
+    const delve::ProvChain single = {{"project", "", "0.6"}};
+    EXPECT_EQ(delve::format_prov(single), "0.6 <- project");
+}
