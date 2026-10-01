@@ -21,5 +21,8 @@ compile_commands.json
 
 *.log
 
+# Delve MCP server venv
+tools/delve_mcp/.venv/
+
 # Scratch space for local experiments
 tmp/

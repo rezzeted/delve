@@ -23,3 +23,13 @@ nw_add_console_app(
 # fallback resolve like in the DelveCli smokes.
 add_test(NAME DelveServe_smoke COMMAND DelveServe --smoke)
 set_tests_properties(DelveServe_smoke PROPERTIES WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+
+# Python wire-protocol smoke (tools/delve_mcp): a real DelveServe on a free
+# port plus a stdlib raw-socket client — guards the Python<->C++ framing.
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+  add_test(NAME DelveServe_rpc_py COMMAND ${Python3_EXECUTABLE}
+           ${CMAKE_SOURCE_DIR}/tools/delve_mcp/tests/integration_smoke.py
+           $<TARGET_FILE:DelveServe> ${CMAKE_SOURCE_DIR})
+  set_tests_properties(DelveServe_rpc_py PROPERTIES WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+endif()

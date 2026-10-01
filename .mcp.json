@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "delve": {
+      "type": "stdio",
+      "command": "python3",
+      "args": [
+        "-m",
+        "tools.delve_mcp.launch"
+      ],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "PYTHONIOENCODING": "utf-8",
+        "PYTHONUTF8": "1",
+        "PYTHONUNBUFFERED": "1"
+      }
+    }
+  }
+}

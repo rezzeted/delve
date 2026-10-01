@@ -15,8 +15,10 @@ Delve — оркестратор подземелий поверх `thirdparty/p
 Раскладка: `src/libs/delve` (проект/граф/IR), `src/libs/delve_layout` (F2/F3),
 `src/libs/delve_fill` (F6), `src/libs/delve_check` (F11), `src/libs/delve_export`
 (F7), `src/libs/delve_d0` (D0, замороженный IR); приложения `src/apps/DelveViewer`
-(F9) и `src/apps/DelveCli` (F10, машинная петля — см. `docs/cli_v1.md`); тесты
-`src/tests/delve_*_test.cpp` + данные `src/tests/data`;
+(F9), `src/apps/DelveCli` (F10, машинная петля — см. `docs/cli_v1.md`) и
+`src/apps/DelveServe` (RPC-демон с тёплыми слотами — см. `docs/mcp_v1.md`);
+MCP-сервер `delve` — `tools/delve_mcp/` (Python, FastMCP → DelveServe, pgg-слой
+к PggServe); тесты `src/tests/delve_*_test.cpp` + данные `src/tests/data`;
 слот-ассеты `assets/`; доки `docs/`; демо-проекты `projects/` (превью в
 DelveViewer, см. `projects/demo/README.md`).
 
@@ -42,6 +44,9 @@ DelveViewer, см. `projects/demo/README.md`).
   (~18 с, frozen fill) — headless-прогоны пути данных DelveViewer в ctest.
 - Smoke машинной петли (F10): `DelveCli_smoke_validate/layout/export/check/
   errors` (~25 с суммарно) — команды DelveCli, включая негативный путь D101.
+- Smoke демона (MCP): `DelveServe_smoke` (~12 с, тёплая петля, asset_check,
+  два клиента) и `DelveServe_rpc_py` (python3 stdlib ↔ живой DelveServe);
+  DI-юниты `python3 -m unittest tools.delve_mcp.test_session`.
 - Медленные (Debug + PGG, минуты — это норма, не зависание): `delve_fill_test`
   (~4 мин), `delve_check_test` (~1–2 мин без `DelveCheck.PassFrozen`; сам
   `PassFrozen` очень медленный — запускать отдельно на незагруженной машине).
