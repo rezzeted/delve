@@ -201,8 +201,14 @@ TEST(DelveFill, FillFrozenLevel) {
         const int n = perUnit["room:" + r.id];
         EXPECT_EQ(n, r.role == "hall" ? 2 : 1) << r.id;
     }
-    for (size_t k = 0; k < out.stats.lamps; ++k)
-        EXPECT_EQ(perUnit["deco:lamp:" + std::to_string(k)], 1) << k;
+    // Lamp ids are room-local (D3): deco:lamp:<room>:<k>, one anchor each.
+    size_t lampUnits = 0;
+    for (const auto& [unit, n] : perUnit)
+        if (unit.rfind("deco:lamp:", 0) == 0) {
+            ++lampUnits;
+            EXPECT_EQ(n, 1) << unit;
+        }
+    EXPECT_EQ(lampUnits, out.stats.lamps);
 }
 
 TEST(DelveFill, FillDeterministic) {

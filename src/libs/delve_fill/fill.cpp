@@ -358,7 +358,8 @@ bool expandDoor(const IrDoor& d, int fill_seed, const std::string& asset, Unit& 
 
 // v1 lamp placement: centered inset grid over the room bbox, nx = max(1,
 // round(sx / step)) per axis, mount on the ceiling plane. Positions outside a
-// figured room's contour are skipped (rects: never triggers).
+// figured room's contour are skipped (rects: never triggers). Ids are
+// room-local (D3): deco:lamp:<room>:<k>.
 bool pointInRoomGrid(const IrRoom& r, double cell, double x, double z) {
     bool inside = false;
     const size_t n = r.grid.size();
@@ -370,7 +371,7 @@ bool pointInRoomGrid(const IrRoom& r, double cell, double x, double z) {
     return inside;
 }
 
-bool expandLamps(const IrRoom& r, double cell, double step, int fill_seed, int& k,
+bool expandLamps(const IrRoom& r, double cell, double step, int fill_seed,
                  const std::string& asset, std::vector<Unit>& units, std::string& err) {
     double x0 = 1e300, x1 = -1e300, z0 = 1e300, z1 = -1e300;
     for (const auto& [gx, gy] : r.grid) {
@@ -388,13 +389,14 @@ bool expandLamps(const IrRoom& r, double cell, double step, int fill_seed, int& 
               "'";
         return false;
     }
+    int k = 0;
     for (int i = 0; i < nx; ++i)
         for (int j = 0; j < nz; ++j) {
             const double lx = x0 + (x1 - x0) * (i + 0.5) / nx;
             const double lz = z0 + (z1 - z0) * (j + 0.5) / nz;
             if (!pointInRoomGrid(r, cell, lx, lz)) continue;  // notch of a figured room
             Unit u;
-            u.id = "deco:lamp:" + std::to_string(k++);
+            u.id = "deco:lamp:" + r.id + ":" + std::to_string(k++);
             u.slot = "decor:lamp";
             u.asset = asset;
             PointsBuilder p;
@@ -836,12 +838,10 @@ bool fill_level(const IrV2& ir, const Project& project, const FillOpts& opts, Fi
         if (!expandDoor(d, fseed, assets["door"], u, err)) return false;
         units.push_back(std::move(u));
     }
-    {
-        int k = 0;
-        for (const auto& r : ir.rooms)
-            if (!expandLamps(r, project.fill.cell, project.fill.lamp_step, fseed, k,
-                             assets["decor:lamp"], units, err))
-                return false;
+    for (const auto& r : ir.rooms) {
+        if (!expandLamps(r, project.fill.cell, project.fill.lamp_step, fseed,
+                         assets["decor:lamp"], units, err))
+            return false;
     }
 
     std::vector<pgg::GeoPtr> meshes, anchors;

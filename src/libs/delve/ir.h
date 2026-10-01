@@ -1,6 +1,6 @@
 #pragma once
 
-// Delve IR v2 (F4, docs/ir_v2.md): walls, nodes, doors, room developments and
+// Delve IR v3 (F4, docs/ir_v2.md): walls, nodes, doors, room developments and
 // transitions. Two input paths into one core (D2.3b):
 //   - build_ir_v2: frozen IR (delve-ir/0) + a fill project; v1 restrictions
 //     (rects, 1-cell doors, dtype open, uniform project wall_t) hold.
@@ -8,6 +8,9 @@
 //     dtype from passage edges, multi-cell doors, figured orthogonal rooms,
 //     per-room wall_t via resolve_room_fill, 5.2 mismatch is an F4 error).
 // v2 = v1 geometry with string room ids (frozen decimal form, D2: graph id).
+// v3 (D3, F8): position-independent wall/node ids (owner room + contour
+// position), so a re-layout that moves rooms keeps their unit ids and cache
+// keys; delve-ir/2 files stay readable (ids are opaque to the reader).
 
 #include <map>
 #include <string>
@@ -18,7 +21,8 @@
 
 namespace delve {
 
-inline constexpr const char* kIrFormat = "delve-ir/2";
+inline constexpr const char* kIrFormat = "delve-ir/3";
+inline constexpr const char* kIrFormatV2 = "delve-ir/2";  // legacy, readable
 
 using GridPt = std::pair<int, int>;          // (gx, gy), grid units
 using WorldPt = std::pair<double, double>;   // (x, z), meters
@@ -35,7 +39,7 @@ struct IrRoom {
 // One wall body unit (§5.2): a contour-edge atom split at every T-vertex.
 // Axis endpoints are lex-min first; rooms are left/right of g0 -> g1.
 struct IrWall {
-    std::string id;  // wall:<x0>,<y0>-<x1>,<y1>
+    std::string id;  // wall:<owner_room>:<edge>[.<k>]; .k iff the owner's contour edge holds >1 atom
     bool outer = false;
     std::string owner;  // shared: min room id; outer: its room
     std::string room_left, room_right;  // "" = void
@@ -92,7 +96,7 @@ struct IrNodeFace {
 };
 
 struct IrNode {
-    std::string id;  // node:<gx>,<gy>
+    std::string id;  // node:<owner_room>:<v>; v = vertex index in the owner's atomized contour
     std::string owner;  // min adjacent room id
     GridPt at;
     double thick = 0;

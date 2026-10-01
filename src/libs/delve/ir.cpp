@@ -468,23 +468,74 @@ bool build_core(const Project& project, const std::vector<RoomInput>& frooms,
         }
         return std::pair<GridPt, GridPt>(lex_min(p0, p1), lex_max(p0, p1));
     };
-    auto wall_id_of = [](GridPt g0, GridPt g1) {
-        return "wall:" + std::to_string(g0.first) + "," + std::to_string(g0.second) + "-" +
-               std::to_string(g1.first) + "," + std::to_string(g1.second);
+
+    // --- per-room atomized contour index (D3, F8: position-independent ids) --
+    // For every room: its contour atoms per edge in walk order, the reverse
+    // map atom -> (edge, k), and the walk index of every atomized-contour
+    // vertex. Wall/node ids are derived from these, so a re-layout that moves
+    // a room keeps the ids of its units (delve-ir/3).
+    struct RoomContour {
+        std::vector<std::vector<size_t>> edge_atoms;  // [contour edge] atom indices, walk order
+        std::map<size_t, std::pair<size_t, size_t>> atom_pos;  // atom index -> (edge, k)
+        std::map<GridPt, int> vertex_index;  // atomized-contour vertex -> walk index
     };
+    std::map<std::string, RoomContour> contours;
+    std::map<std::pair<GridPt, GridPt>, size_t> atom_by_ends;
+    for (size_t ai = 0; ai < atoms.size(); ++ai) atom_by_ends[atom_ends(atoms[ai])] = ai;
+    for (const auto& fr : frooms) {
+        RoomContour rc;
+        int walk = 0;
+        for (size_t i = 0; i < fr.grid.size(); ++i) {
+            const GridPt p = fr.grid[i], q = fr.grid[(i + 1) % fr.grid.size()];
+            const bool vert = p.first == q.first;
+            const int w = vert ? ((q.second > p.second) ? 1 : -1) : ((q.first > p.first) ? 1 : -1);
+            std::vector<size_t> eas;
+            for (size_t ai = 0; ai < atoms.size(); ++ai) {
+                const Atom& a = atoms[ai];
+                if (a.vert != vert || a.coord != (vert ? p.first : p.second)) continue;
+                const int lo = vert ? std::min(p.second, q.second) : std::min(p.first, q.first);
+                const int hi = vert ? std::max(p.second, q.second) : std::max(p.first, q.first);
+                if (lo <= a.t0 && a.t1 <= hi) eas.push_back(ai);
+            }
+            std::sort(eas.begin(), eas.end(), [&](size_t x, size_t y) {
+                const double mx = (atoms[x].t0 + atoms[x].t1) * 0.5;
+                const double my = (atoms[y].t0 + atoms[y].t1) * 0.5;
+                return w > 0 ? mx < my : mx > my;
+            });
+            rc.vertex_index.try_emplace(p, walk);
+            for (size_t k = 0; k < eas.size(); ++k) {
+                rc.atom_pos[eas[k]] = {i, k};
+                ++walk;
+                const Atom& a = atoms[eas[k]];
+                const int e_t = (w > 0) ? a.t1 : a.t0;  // walk-end axis coord
+                rc.vertex_index.try_emplace(vert ? GridPt{a.coord, e_t} : GridPt{e_t, a.coord},
+                                            walk);
+            }
+            rc.edge_atoms.push_back(std::move(eas));
+        }
+        contours[fr.id] = std::move(rc);
+    }
+    auto wall_id_of = [&](size_t ai, const std::string& owner) {
+        const RoomContour& rc = contours.at(owner);
+        const auto [ei, k] = rc.atom_pos.at(ai);
+        std::string id = "wall:" + owner + ":" + std::to_string(ei);
+        if (rc.edge_atoms[ei].size() > 1) id += "." + std::to_string(k);
+        return id;
+    };
+    auto node_id_of = [&](GridPt v, const std::string& owner) {
+        return "node:" + owner + ":" + std::to_string(contours.at(owner).vertex_index.at(v));
+    };
+    std::vector<std::string> atom_wall_id(atoms.size());
+    std::map<GridPt, std::string> node_id_at;
 
     // --- walls (§5.2: one body per atom, owner = min room id, thickness from
     // the owner; a shared wall whose sides resolve different thicknesses is an
     // F4 error naming both rooms) ---
     std::map<std::string, size_t> wall_idx;
-    for (const auto& a : atoms) {
+    for (size_t ai = 0; ai < atoms.size(); ++ai) {
+        const Atom& a = atoms[ai];
         const auto [g0, g1] = atom_ends(a);
         IrWall w;
-        w.id = wall_id_of(g0, g1);
-        if (wall_idx.count(w.id)) {
-            err = err_path + ": internal: duplicate wall " + w.id;
-            return false;
-        }
         // Rooms left/right of the g0 -> g1 axis (grid math view, x right, y up).
         if (a.vert) {  // axis +y: left = -x = neg side
             w.room_left = a.room_neg;
@@ -495,11 +546,17 @@ bool build_core(const Project& project, const std::vector<RoomInput>& frooms,
         }
         w.outer = w.room_left.empty() != w.room_right.empty();
         if (w.room_left.empty() && w.room_right.empty()) {
-            err = err_path + ": internal: wall " + w.id + " has no rooms";
+            err = err_path + ": internal: wall atom " + fmt_pt(g0) + "-" + fmt_pt(g1) +
+                  " has no rooms";
             return false;
         }
         w.owner = w.outer ? (w.room_left.empty() ? w.room_right : w.room_left)
                           : std::min(w.room_left, w.room_right);
+        w.id = wall_id_of(ai, w.owner);
+        if (wall_idx.count(w.id)) {
+            err = err_path + ": internal: duplicate wall " + w.id;
+            return false;
+        }
         if (!w.outer) {
             const double tl = room_of(w.room_left).wall_t, tr = room_of(w.room_right).wall_t;
             if (!(tl == tr)) {
@@ -516,6 +573,7 @@ bool build_core(const Project& project, const std::vector<RoomInput>& frooms,
         const double h_owner = ir.rooms[room_idx[w.owner]].h;
         w.h_left = w.room_left.empty() ? h_owner : ir.rooms[room_idx[w.room_left]].h;
         w.h_right = w.room_right.empty() ? h_owner : ir.rooms[room_idx[w.room_right]].h;
+        atom_wall_id[ai] = w.id;
         wall_idx[w.id] = ir.walls.size();
         ir.walls.push_back(std::move(w));
     }
@@ -549,7 +607,7 @@ bool build_core(const Project& project, const std::vector<RoomInput>& frooms,
             if (!a->room_pos.empty()) adj.insert(a->room_pos);
         }
         IrNode node;
-        node.id = "node:" + std::to_string(v.first) + "," + std::to_string(v.second);
+        node.id = node_id_of(v, *adj.begin());
         node.owner = *adj.begin();
         node.at = v;
         node.thick = room_of(node.owner).wall_t;
@@ -598,6 +656,7 @@ bool build_core(const Project& project, const std::vector<RoomInput>& frooms,
             return a.n.second < b.n.second;
         });
         node_idx[v] = ir.nodes.size();
+        node_id_at[v] = node.id;
         ir.nodes.push_back(std::move(node));
     }
     for (size_t ni = 0; ni < ir.nodes.size(); ++ni) {
@@ -653,7 +712,7 @@ bool build_core(const Project& project, const std::vector<RoomInput>& frooms,
             return false;
         }
         const auto [g0, g1] = atom_ends(*owner_atom);
-        const std::string wid = wall_id_of(g0, g1);
+        const std::string& wid = atom_wall_id[atom_by_ends.at({g0, g1})];
         IrWall& wall = ir.walls[wall_idx[wid]];
         const std::string wa = std::min(wall.room_left, wall.room_right);
         const std::string wb = std::max(wall.room_left, wall.room_right);
@@ -772,7 +831,7 @@ bool build_core(const Project& project, const std::vector<RoomInput>& frooms,
                 const std::string other = room_on_neg ? a.room_pos : a.room_neg;
                 const bool outer = other.empty();
                 const auto [g0, g1] = atom_ends(a);
-                const std::string wid = wall_id_of(g0, g1);
+                const std::string& wid = atom_wall_id[atom_by_ends.at({g0, g1})];
                 const IrWall& wall = ir.walls[wall_idx[wid]];
                 IrFacing f;
                 f.id = "fac:" + fr.id + ":" + std::to_string(i);
@@ -925,8 +984,7 @@ bool build_core(const Project& project, const std::vector<RoomInput>& frooms,
         for (const Joint& jt : joints) {
             if (jt.room != fr.id) continue;
             if (jt.has_tface) {
-                const std::string nid =
-                    "node:" + std::to_string(jt.t_vertex.first) + "," + std::to_string(jt.t_vertex.second);
+                const std::string& nid = node_id_at.at(jt.t_vertex);
                 const auto fit = face_idx.find({nid, jt.t_normal});
                 if (fit == face_idx.end()) {
                     err = err_path + ": internal: T-face missing at " + fmt_pt(jt.t_vertex);
@@ -946,8 +1004,7 @@ bool build_core(const Project& project, const std::vector<RoomInput>& frooms,
                 }
                 face.style = ir.facings[jt.facing_in].style;  // A; transitions refine below
             } else if (jt.concave) {
-                const std::string nid =
-                    "node:" + std::to_string(jt.t_vertex.first) + "," + std::to_string(jt.t_vertex.second);
+                const std::string& nid = node_id_at.at(jt.t_vertex);
                 IrNode& node = ir.nodes[node_idx[jt.t_vertex]];
                 const std::pair<GridPt, std::string> refinements[2] = {
                     {jt.c_normal_in, ir.facings[jt.facing_in].style},
@@ -1114,8 +1171,7 @@ bool build_core(const Project& project, const std::vector<RoomInput>& frooms,
         emit(jt.facing_in, f_in.s0, false, 0, 0, 0.0, 0);  // facings run with +s
         emit(jt.facing_out, f_out.s0 + out_shift, false, 0, 0, out_shift, 0);
         if (jt.has_tface && zone_place == "corner") {
-            const std::string nid = "node:" + std::to_string(jt.t_vertex.first) + "," +
-                                    std::to_string(jt.t_vertex.second);
+            const std::string& nid = node_id_at.at(jt.t_vertex);
             const size_t ni = node_idx[jt.t_vertex];
             const size_t fai = face_idx[{nid, jt.t_normal}];
             // Face +x = right of the outward normal (slots §2.4); flip iff it
@@ -1574,11 +1630,12 @@ bool read_ir_v2_json(const std::string& text, IrV2& out, std::string& err) {
         return false;
     }
     const std::string format = doc.value("format", std::string{});
-    if (format != kIrFormat) {
-        err = "unsupported IR format \"" + format + "\" (expected " + kIrFormat +
+    if (format != kIrFormat && format != kIrFormatV2) {
+        err = "unsupported IR format \"" + format + "\" (expected " + kIrFormat + " or " +
+              kIrFormatV2 +
               "); regenerate the IR from the frozen IR / project with the D2 builder";
         if (format == "delve-ir/1")
-            err += " (v1 files carry int room ids and cannot be read as v2)";
+            err += " (v1 files carry int room ids and cannot be read as v2+)";
         return false;
     }
     try {

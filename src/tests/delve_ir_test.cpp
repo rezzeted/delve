@@ -60,6 +60,12 @@ const delve::IrNode* findNode(const delve::IrV2& ir, const std::string& id) {
     return nullptr;
 }
 
+const delve::IrNode* findNodeAt(const delve::IrV2& ir, delve::GridPt at) {
+    for (const auto& n : ir.nodes)
+        if (n.at == at) return &n;
+    return nullptr;
+}
+
 }  // namespace
 
 TEST(ProjectRules, SideResolution) {
@@ -145,18 +151,23 @@ TEST(IrRealLayout, WallsNodesDoors) {
             EXPECT_NE(w.room_left, w.room_right) << w.id;
         }
     }
-    // F4: every vertex where walls meet = exactly one node.
+    // F4: every vertex where walls meet = exactly one node; v3 ids are
+    // position-independent: node:<owner>:<v>, wall:<owner>:<edge>[.<k>] (D3).
     std::set<std::pair<int, int>> ends;
     for (const auto& w : ir.walls) {
         ends.insert(w.g0);
         ends.insert(w.g1);
+        EXPECT_EQ(w.id.rfind("wall:" + w.owner + ":", 0), 0u) << w.id;
     }
     EXPECT_EQ(ir.nodes.size(), ends.size());
+    std::set<std::string> nodeIds;
     for (const auto& e : ends) {
-        const std::string id =
-            "node:" + std::to_string(e.first) + "," + std::to_string(e.second);
-        EXPECT_NE(findNode(ir, id), nullptr) << id;
+        const delve::IrNode* n = findNodeAt(ir, e);
+        ASSERT_NE(n, nullptr) << e.first << "," << e.second;
+        EXPECT_EQ(n->id.rfind("node:" + n->owner + ":", 0), 0u) << n->id;
+        nodeIds.insert(n->id);
     }
+    EXPECT_EQ(nodeIds.size(), ir.nodes.size()) << "node ids must be unique";
     // No corridors in this layout, no style changes -> no transitions, no warnings.
     EXPECT_TRUE(ir.transitions.empty());
     EXPECT_TRUE(ir.warnings.empty());
@@ -290,7 +301,7 @@ TEST(IrCorner, ButtCentered) {
     EXPECT_NEAR(f0->zones[0].l0, 1.2, 1e-9);
     EXPECT_NEAR(f0->zones[0].l1, 1.4, 1e-9);
     EXPECT_NEAR(f0->zones[0].t_at_l0, -1.2, 1e-9);
-    const delve::IrNode* n5 = findNode(ir, "node:5,0");
+    const delve::IrNode* n5 = findNodeAt(ir, {5, 0});
     ASSERT_NE(n5, nullptr);
     const delve::IrNodeFace* tf = nullptr;
     for (const auto& f : n5->faces)
@@ -374,7 +385,7 @@ TEST(IrCorner, ChaseOnWall) {
     EXPECT_DOUBLE_EQ(f1->zones[0].l1, 1.0);
     EXPECT_DOUBLE_EQ(f1->zones[0].t_at_l0, 0.0);
     // Wall placement never touches the T-face.
-    const delve::IrNode* n5 = findNode(ir, "node:5,0");
+    const delve::IrNode* n5 = findNodeAt(ir, {5, 0});
     ASSERT_NE(n5, nullptr);
     for (const auto& f : n5->faces) EXPECT_TRUE(f.zones.empty());
 }
@@ -750,7 +761,7 @@ TEST(IrFromLayout, FiguredConcaveCorner) {
 
     // The concave pillar: two open faces look into the room itself, styled
     // from their flanks (brick by the outer rule), not the room base (stone).
-    const delve::IrNode* n = findNode(ir, "node:2,2");
+    const delve::IrNode* n = findNodeAt(ir, {2, 2});
     ASSERT_NE(n, nullptr);
     ASSERT_EQ(n->faces.size(), 2u);
     for (const auto& f : n->faces) {
