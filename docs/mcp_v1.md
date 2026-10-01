@@ -176,14 +176,23 @@ env `PGG_REPO_ROOT` или `<delve>/thirdparty/pgg`; бинарь — env `PGG_S
 Контракт ops — `thirdparty/pgg/docs/pgg/serve_rpc.md`.
 
 Инструменты: `pgg_status` · `pgg_load(path, lib_roots?)` ·
-`pgg_render(node, file?, out?, size?, ortho?, target?, orbit?, zoom?)` ·
-`pgg_probe(file?, spec?, specs?)` · `pgg_docs(symbol, file?)`.
+`pgg_params(params, file?)` · `pgg_render(node, file?, out?, size?, ortho?,
+target?, orbit?, zoom?)` · `pgg_probe(file?, spec?, specs?)` ·
+`pgg_docs(symbol, file?)`.
 
 Зачем: `delve_asset_check` отвечает «слот принял/отверг ассет и почему», но
 не показывает геометрию. Когда ассет надо чинить, агент идёт в pgg-слой:
 `pgg_probe` (числа: bbox, счётчики, hist по атрибутам) и `pgg_render` (кадр)
 по тому же `.pgg` — без полного fill уровня; PggServe сам перечитывает
 правки .pgg по mtime (F4).
+
+Слот-ассеты delve объявляют **входы слота без дефолтов** (`seg`/`cuts`/
+`zones` у facing и т.п.) — `pgg_load` на них отвечает E604, это штатно:
+перед probe/render входы связываются `pgg_params` фикстурами рядом с ассетом
+(значение `"@<файл>"` грузит pgg-points/1 относительно каталога .pgg:
+`{"seg": "@facing_v1.seg.points.json", …}`). Выходы слот-ассетов — узлы
+`mesh` и `anchors` (контракт R-A3): `pgg_probe(spec="mesh:stats")`,
+`pgg_render(node="mesh")`.
 
 `lib_roots` по умолчанию (если не задан) — из delve-контекста: каталог самого
 ассета + `<delve>/assets` (покрывает `import codes` / `import patterns` —
@@ -203,7 +212,7 @@ delve_export(out="out/")        # obj + anchors + units + ir
 delve_units() / delve_provenance(room="hall")   # инспекция результата
 # отладка слот-ассета без полного fill:
 delve_asset_check(slot="facing", asset="walls/facing_v1.pgg")
-pgg_probe / pgg_render          # «под микроскопом», тот же .pgg
+pgg_load → pgg_params(фикстуры входов) → pgg_probe / pgg_render  # тот же .pgg
 # правка графа/комнат/каталога:
 delve_layout() → delve_fill()   # layout явно, дальше та же петля
 ```
@@ -218,9 +227,10 @@ delve_layout() → delve_fill()   # layout явно, дальше та же пе
 - `DelveServe_rpc_py` (ctest, python3 stdlib): живой демон на свободном
   порту, ping/status/load/validate по сырому сокету — проверка связки
   «python ↔ DelveServe» без venv и mcp-пакета.
-- `python3 -m unittest tools.delve_mcp.test_session` — DI-юниты
-  `DelveSession`: need_build, автоподъём, stale_binary, restart+replay,
-  retry (без venv; `session.py` не импортирует `mcp`).
+- `python3 -m unittest tools.delve_mcp.test_session tools.delve_mcp.test_pgg_layer`
+  — DI-юниты (67 шт., без venv; `mcp` импортирует только `server.py`):
+  need_build, автоподъём, stale_binary, restart+replay, retry, ленивость
+  pgg-слоя, авто `lib_roots`, xvfb, форварды pgg-инструментов.
 
 ## Грабли
 

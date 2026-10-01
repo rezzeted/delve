@@ -499,6 +499,22 @@ class PggLayerLibRootsTests(unittest.TestCase):
             self.assertEqual(calls[-1]["op"], "docs")
             self.assertEqual(calls[-1]["args"]["file"], "/other.pgg")  # explicit wins
 
+    def test_params_forward_and_file_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            _touch(root, "assets/x.pgg")
+            calls: list[dict] = []
+            layer = self._layer(root, calls)
+            layer.load("assets/x.pgg")
+            loaded = calls[0]["args"]["path"]
+
+            layer.params({"seg": "@x.seg.points.json", "stories": 2})
+            self.assertEqual(calls[-1]["op"], "params")
+            self.assertEqual(calls[-1]["args"]["seg"], "@x.seg.points.json")
+            self.assertEqual(calls[-1]["args"]["file"], loaded)  # last_file fallback
+
+            layer.params({"stories": 3}, file="/other.pgg")
+            self.assertEqual(calls[-1]["args"]["file"], "/other.pgg")  # explicit wins
+
 
 if __name__ == "__main__":
     unittest.main()

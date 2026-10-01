@@ -69,6 +69,9 @@ class PggLayer:
             "lib_roots": self._lib_roots(path, lib_roots),
         })
 
+    def params(self, params: dict[str, Any], file: Optional[str] = None) -> dict[str, Any]:
+        return self.session.call("params", _with_file(dict(params or {}), file))
+
     def render(self, node: str, file: Optional[str] = None, out: Optional[str] = None,
                size: Optional[list[float]] = None, ortho: Optional[str] = None,
                target: Optional[str] = None, orbit: Optional[list[float]] = None,

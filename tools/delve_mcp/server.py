@@ -65,11 +65,15 @@ pgg, ``cwd`` = thirdparty/pgg). Когда ``delve_asset_check`` красный 
 1. ``pgg_load(path)`` — path ассета относительно корня delve
    (``assets/walls/facing_v1.pgg``) или абсолютный; ``lib_roots`` подставится
    сам (каталог ассета + assets delve + корни проекта).
-2. ``pgg_probe(spec="…")`` — числа: bbox, stats, schema узла (инспекторы как в
+2. ``pgg_params({...})`` — если у ассета обязательные входы слота (load
+   ответил E604: seg/cuts/zones у delve-ассетов): значение ``"@<файл>"``
+   грузит фикстуру pgg-points/1 рядом с .pgg (``@facing_v1.seg.points.json``
+   и т.п.).
+3. ``pgg_probe(spec="…")`` — числа: bbox, stats, schema узла (инспекторы как в
    pgg: schema/stats/bbox[group=…]/check/hist[…]).
-3. ``pgg_render(node=…)`` — кадр узла (нет GPU/окна у демона — ответ
+4. ``pgg_render(node=…)`` — кадр узла (нет GPU/окна у демона — ответ
    ``no_gpu``: тогда обходиться probe + asset_check).
-4. Правка .pgg на диске → сразу повторный ``pgg_probe``/``pgg_render``: у
+5. Правка .pgg на диске → сразу повторный ``pgg_probe``/``pgg_render``: у
    PggServe авто-reload по mtime (F4, в ответе reloaded=true), явный
    ``pgg_load`` после правки не нужен.
 Перед grep по спеке языка — ``pgg_docs("<builtin>")``.
@@ -291,10 +295,29 @@ def pgg_load(path: str, lib_roots: Optional[list[str]] = None) -> dict:
     as z`` delve-ассетов; сверху PggServe всегда дописывает свой resources/pgg.
     Относительные lib_roots — от корня delve. Ответ: {diagnostics:
     [{code,line,col,warning,message}], has_errors, ms, path, session:{file}}.
-    После load ``file`` в pgg_render/pgg_probe/pgg_docs можно опускать.
-    Пример: pgg_load("assets/walls/facing_v1.pgg") → has_errors=false.
+    После load ``file`` в pgg_params/pgg_render/pgg_probe/pgg_docs можно
+    опускать. Слот-ассеты delve объявляют входы слота без дефолтов — load на
+    них отвечает E604 (has_errors=true), это штатно: свяжите входы через
+    pgg_params перед probe/render.
+    Пример: pgg_load("assets/walls/facing_v1.pgg").
     """
     return _pgg_layer.load(path, lib_roots)
+
+
+@mcp.tool()
+def pgg_params(params: dict[str, Any], file: Optional[str] = None) -> dict:
+    """Установить значения @param-параметров графа (переживают pgg_load).
+
+    Слот-ассеты delve объявляют входы слота (seg/cuts/zones у facing и т.п.)
+    без дефолтов — pgg_load на них отвечает E604; свяжите входы фикстурами
+    перед probe/render: значение ``"@<файл>"`` грузит pgg-points/1 относительно
+    каталога .pgg, например pgg_params({"seg": "@facing_v1.seg.points.json",
+    "cuts": "@facing_v1.cuts.points.json", "zones": "@facing_v1.zones.points.json"}).
+    Значения — числа/строки/bool или массив (сериализуется в вектор).
+    Неизвестные имена — в поле unknown. file — слот; без него — последний
+    pgg_load этого MCP-процесса. Ответ data: {params, unknown, session:{file}}.
+    """
+    return _pgg_layer.params(params, file=file)
 
 
 @mcp.tool()
@@ -302,13 +325,15 @@ def pgg_probe(file: Optional[str] = None, spec: Optional[str] = None,
               specs: Optional[list[str]] = None) -> dict:
     """Пробник-инспектор узла загруженного .pgg (числа без картинки).
 
-    spec — "путь:инспектор[параметры]", например "facing:schema" или
-    "facing:bbox[group=stone]"; specs — список таких строк за ОДИН прогон
-    (хотя бы один из spec/specs обязателен). file — слот; после pgg_load можно
-    опускать. Правка .pgg на диске подхватывается сама (F4, reloaded=true).
+    spec — "путь:инспектор[параметры]", например "mesh:schema" или
+    "mesh:bbox[group=stone]"; specs — список таких строк за ОДИН прогон
+    (хотя бы один из spec/specs обязателен). Выходы delve слот-ассетов —
+    ``mesh`` и ``anchors`` (контракт R-A3), промежуточные binding'и тоже
+    доступны. file — слот; после pgg_load можно опускать. Правка .pgg на
+    диске подхватывается сама (F4, reloaded=true).
     Ответ data: {records:[{origin,path,inspector,text}], diagnostics,
     has_errors, ms, cache:{hits,misses}, reloaded, session:{file}}.
-    Пример: pgg_probe(spec="facing:stats").
+    Пример: pgg_probe(spec="mesh:stats").
     """
     return _pgg_layer.probe(file=file, spec=spec, specs=specs)
 
@@ -328,7 +353,8 @@ def pgg_render(node: str, file: Optional[str] = None, out: Optional[str] = None,
     camera, render_state, cache, reloaded, session:{file}}.
     Без GPU (фоновая сессия, нет окна) — ok=false, kind=no_gpu: обходитесь
     pgg_probe + delve_asset_check.
-    Пример: pgg_render(node="facing", ortho="front").
+    Пример: pgg_render(node="mesh", ortho="front") (у delve слот-ассетов
+    выходы ``mesh``/``anchors``).
     """
     return _pgg_layer.render(node, file=file, out=out, size=size, ortho=ortho,
                              target=target, orbit=orbit, zoom=zoom)
