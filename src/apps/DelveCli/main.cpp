@@ -16,10 +16,7 @@
 
 #include <nlohmann/json.hpp>
 
-#if defined(__APPLE__)
-    #include <mach-o/dyld.h>
-#endif
-
+#include "assets.h"
 #include "catalog.h"
 #include "check.h"
 #include "diag.h"
@@ -48,52 +45,6 @@ bool readTextFile(const std::string& path, std::string& text) {
     ss << in.rdbuf();
     text = ss.str();
     return true;
-}
-
-// --- assets resolution (same search order as DelveViewer/level.cpp) ---------
-
-fs::path exePath(const std::string& argv0) {
-#if defined(__APPLE__)
-    char buf[4096];
-    uint32_t size = sizeof(buf);
-    if (_NSGetExecutablePath(buf, &size) == 0) return fs::path(buf);
-    return fs::path(argv0);
-#elif defined(_WIN32)
-    return fs::path(argv0);
-#else
-    std::error_code ec;
-    const fs::path p = fs::read_symlink("/proc/self/exe", ec);
-    return ec ? fs::path(argv0) : p;
-#endif
-}
-
-bool isAssetsDir(const fs::path& dir) {
-    std::error_code ec;
-    return fs::is_regular_file(dir / "codes.pgg", ec);
-}
-
-std::string findAssetsUp(fs::path dir) {
-    std::error_code ec;
-    dir = fs::weakly_canonical(dir, ec);
-    if (ec) return {};
-    for (int i = 0; i < 12; ++i) {
-        if (isAssetsDir(dir / "assets")) return (dir / "assets").string();
-        if (isAssetsDir(dir)) return dir.string();
-        if (!dir.has_parent_path() || dir == dir.parent_path()) break;
-        dir = dir.parent_path();
-    }
-    return {};
-}
-
-std::string resolveDelveAssets(const std::string& argv0, const std::string& projectPath) {
-    std::error_code ec;
-    if (isAssetsDir(fs::current_path(ec) / "assets"))
-        return (fs::current_path(ec) / "assets").string();
-    if (std::string found = findAssetsUp(exePath(argv0).parent_path()); !found.empty()) return found;
-    if (!projectPath.empty())
-        if (std::string found = findAssetsUp(fs::path(projectPath).parent_path()); !found.empty())
-            return found;
-    return {};
 }
 
 // --- args -------------------------------------------------------------------
@@ -247,26 +198,11 @@ struct Context {
     int attemptUsed = 0;
 };
 
-// load_project errors: 5.4 invariant -> D200, foreign format (N7) -> D102,
-// io -> D100, anything else (unknown key, type, range) -> D101.
-delve::Diag classifyProjectError(const std::string& err) {
-    if (err.find("[5.4") != std::string::npos) return delve::make_diag("D200", err);
-    if (err.find("format") != std::string::npos &&
-        (err.find("unsupported") != std::string::npos || err.find("expected") != std::string::npos))
-        return delve::make_diag("D102", err,
-                                "re-save the file with the current Delve or migrate it to "
-                                "delve-project/1");
-    if (err.find("cannot") != std::string::npos &&
-        (err.find("open") != std::string::npos || err.find("read") != std::string::npos))
-        return delve::make_diag("D100", err);
-    return delve::make_diag("D101", err);
-}
-
 bool ensureProject(Context& ctx, const CliArgs& args, std::vector<delve::Diag>& diags) {
     if (ctx.hasProject) return true;
     std::string err;
     if (!delve::load_project(ctx.projectPath, ctx.project, err)) {
-        diags.push_back(classifyProjectError(err));
+        diags.push_back(delve::classify_project_error(err));
         return false;
     }
     if (args.seed) ctx.project.seed = *args.seed;
@@ -378,7 +314,7 @@ bool ensureFill(Context& ctx, const CliArgs& args, const std::string& argv0,
                 std::vector<delve::Diag>& diags) {
     if (ctx.hasFill) return true;
     const std::string assets =
-        !args.assets.empty() ? args.assets : resolveDelveAssets(argv0, ctx.projectPath);
+        !args.assets.empty() ? args.assets : delve::find_delve_assets(argv0, ctx.projectPath);
     if (assets.empty()) {
         diags.push_back(delve::make_diag(
             "D100",
@@ -394,9 +330,7 @@ bool ensureFill(Context& ctx, const CliArgs& args, const std::string& argv0,
     std::string err;
     const double t0 = nowMs();
     if (!delve::fill_level(ctx.ir, ctx.project, opts, ctx.fill, err)) {
-        // delve/slot -> D4xx (R-A3), delve/run -> D5xx (PGG run); the message
-        // carries the slot/run codes verbatim.
-        diags.push_back(delve::make_diag(err.rfind("delve/slot", 0) == 0 ? "D400" : "D500", err));
+        diags.push_back(delve::classify_fill_error(err));
         return false;
     }
     ctx.fillMs = nowMs() - t0;
@@ -406,17 +340,6 @@ bool ensureFill(Context& ctx, const CliArgs& args, const std::string& argv0,
 
 // --- reporting ----------------------------------------------------------------
 
-nlohmann::ordered_json diagsJson(const std::vector<delve::Diag>& diags) {
-    nlohmann::ordered_json arr = nlohmann::ordered_json::array();
-    for (const delve::Diag& d : diags) {
-        nlohmann::ordered_json j{{"code", d.code}, {"message", d.message}};
-        if (!d.hint.empty()) j["hint"] = d.hint;
-        if (d.warning) j["warning"] = true;
-        arr.push_back(std::move(j));
-    }
-    return arr;
-}
-
 // Ends a command: text mode prints stats on stdout and diags on stderr; --json
 // prints a single envelope on stdout. Returns the exit code.
 int finishCmd(const CliArgs& args, int code, const std::vector<delve::Diag>& diags,
@@ -425,7 +348,7 @@ int finishCmd(const CliArgs& args, int code, const std::vector<delve::Diag>& dia
     if (args.json) {
         nlohmann::ordered_json env{{"command", args.command},
                                    {"ok", code == 0},
-                                   {"diagnostics", diagsJson(diags)}};
+                                   {"diagnostics", delve::diags_to_json(diags)}};
         if (!stats.is_null() && !stats.empty()) env["stats"] = stats;
         std::cout << env.dump(2) << '\n';
     } else {
