@@ -1,4 +1,4 @@
-"""Delve MCP server — agent tooling over the DelveServe RPC.
+"""Delve MCP server — agent tooling over the DelveServe RPC (+ a pgg layer).
 
 Stdio transport. Started as the single MCP server ``delve`` via
 ``python3 -m tools.delve_mcp.launch`` (venv) then ``python -m tools.delve_mcp``.
@@ -9,6 +9,12 @@ same Python session auto-starts ``DelveServe`` on every OS; if the binary is
 missing the tools return ``kind=need_build`` with configure/build argv. Every
 response keeps the RPC envelope (``{"ok": true, "data": ...}`` /
 ``{"ok": false, "error"}``). Slot identity is the canonical project path.
+
+The ``pgg_*`` tools are a lazy second layer onto PggServe (127.0.0.1:9878,
+env ``PGG_SERVE_PORT``; repo ``thirdparty/pgg``) for slot-asset debugging —
+probe/render of a single .pgg without a full level fill. PggServe starts only
+on the first ``pgg_*`` call; its ``lib_roots`` default is derived from the
+delve context (see ``pgg_layer.py``).
 """
 
 from __future__ import annotations
@@ -17,6 +23,7 @@ from typing import Any, Optional
 
 from mcp.server.fastmcp import FastMCP
 
+from tools.delve_mcp.pgg_layer import PggLayer
 from tools.delve_mcp.session import DelveSession
 
 _INSTRUCTIONS = """Delve MCP — агентская петля «проект → наполнение → проверки → экспорт»
@@ -50,6 +57,23 @@ _INSTRUCTIONS = """Delve MCP — агентская петля «проект �
 ``delve_units``/``delve_provenance(room)`` — юниты и цепочки происхождения
 последнего fill; ``delve_ir`` — текст delve-ir/3.
 
+Отладка слот-ассета «под микроскопом» (pgg-слой, демон PggServe — поднимается
+лениво на первом pgg_* вызове; его нет → ``need_build`` с командами сборки
+pgg, ``cwd`` = thirdparty/pgg). Когда ``delve_asset_check`` красный или нужны
+числа/картинка одного .pgg без полного fill уровня:
+
+1. ``pgg_load(path)`` — path ассета относительно корня delve
+   (``assets/walls/facing_v1.pgg``) или абсолютный; ``lib_roots`` подставится
+   сам (каталог ассета + assets delve + корни проекта).
+2. ``pgg_probe(spec="…")`` — числа: bbox, stats, schema узла (инспекторы как в
+   pgg: schema/stats/bbox[group=…]/check/hist[…]).
+3. ``pgg_render(node=…)`` — кадр узла (нет GPU/окна у демона — ответ
+   ``no_gpu``: тогда обходиться probe + asset_check).
+4. Правка .pgg на диске → сразу повторный ``pgg_probe``/``pgg_render``: у
+   PggServe авто-reload по mtime (F4, в ответе reloaded=true), явный
+   ``pgg_load`` после правки не нужен.
+Перед grep по спеке языка — ``pgg_docs("<builtin>")``.
+
 Конверты: ``{"ok":true,"data":...}`` или ``{"ok":false,"error":{"kind",...}}``.
 kind — ``bad_args``/``no_file``/``no_layout``/``no_fill``/``not_found``/
 ``busy``/``io_error``/``need_build``/``unreachable`` или D-код шага конвейера
@@ -62,6 +86,10 @@ kind — ``bad_args``/``no_file``/``no_layout``/``no_fill``/``not_found``/
 mcp = FastMCP("delve", instructions=_INSTRUCTIONS)
 
 _session = DelveSession()
+
+# Lazy pgg layer: the PggSession (and PggServe itself) appears only on the
+# first pgg_* call — delve tools never touch it.
+_pgg_layer = PggLayer(_session)
 
 
 def _call(op: str, args: Optional[dict[str, Any]] = None) -> dict:
@@ -233,6 +261,91 @@ def delve_asset_check(slot: str, asset: str, file: Optional[str] = None) -> dict
     Пример: delve_asset_check(slot="room_fill", asset="rooms/fill_v1.pgg").
     """
     return _call("asset_check", _with_file({"slot": slot, "asset": asset}, file))
+
+
+# --- pgg layer: slot-asset debugging via PggServe ----------------------------
+
+
+@mcp.tool()
+def pgg_status() -> dict:
+    """Живость PggServe (pgg-слой для отладки слот-ассетов).
+
+    PggServe поднимается лениво — delve-инструменты его не трогают. При живом
+    RPC — data: {serve:"running", binary?, rpc:{host,port}, slots, gpu,
+    uptime_s, ...}. Бинаря нет — ok=false, error.kind=need_build (error.build —
+    шаги сборки pgg, cwd = thirdparty/pgg). Порт 9878 (env PGG_SERVE_PORT).
+    Пример: pgg_status().
+    """
+    return _pgg_layer.status()
+
+
+@mcp.tool()
+def pgg_load(path: str, lib_roots: Optional[list[str]] = None) -> dict:
+    """Загрузить .pgg-ассет в слот PggServe (статическая проверка без прогона).
+
+    path — абсолютный или относительно корня delve (``assets/walls/facing_v1.pgg``
+    резолвится сам; прочие относительные — от корня pgg-репо, это cwd демона).
+    lib_roots — корни import'ов; БЕЗ него подставляются автоматически: каталог
+    ассета + <delve>/assets (+ каталог проекта и его asset_roots, если был
+    delve_load) — этого хватает для ``import codes as c`` / ``import patterns
+    as z`` delve-ассетов; сверху PggServe всегда дописывает свой resources/pgg.
+    Относительные lib_roots — от корня delve. Ответ: {diagnostics:
+    [{code,line,col,warning,message}], has_errors, ms, path, session:{file}}.
+    После load ``file`` в pgg_render/pgg_probe/pgg_docs можно опускать.
+    Пример: pgg_load("assets/walls/facing_v1.pgg") → has_errors=false.
+    """
+    return _pgg_layer.load(path, lib_roots)
+
+
+@mcp.tool()
+def pgg_probe(file: Optional[str] = None, spec: Optional[str] = None,
+              specs: Optional[list[str]] = None) -> dict:
+    """Пробник-инспектор узла загруженного .pgg (числа без картинки).
+
+    spec — "путь:инспектор[параметры]", например "facing:schema" или
+    "facing:bbox[group=stone]"; specs — список таких строк за ОДИН прогон
+    (хотя бы один из spec/specs обязателен). file — слот; после pgg_load можно
+    опускать. Правка .pgg на диске подхватывается сама (F4, reloaded=true).
+    Ответ data: {records:[{origin,path,inspector,text}], diagnostics,
+    has_errors, ms, cache:{hits,misses}, reloaded, session:{file}}.
+    Пример: pgg_probe(spec="facing:stats").
+    """
+    return _pgg_layer.probe(file=file, spec=spec, specs=specs)
+
+
+@mcp.tool()
+def pgg_render(node: str, file: Optional[str] = None, out: Optional[str] = None,
+               size: Optional[list[float]] = None, ortho: Optional[str] = None,
+               target: Optional[str] = None, orbit: Optional[list[float]] = None,
+               zoom: Optional[float] = None) -> dict:
+    """Кадр узла загруженного .pgg (GPU-рендер PggServe).
+
+    node — имя binding/output'а. out — куда писать PNG (по умолчанию
+    tmp/pgg_rpc_shots/ у pgg-репо); size — размер FBO; ortho — front|side|top|off;
+    target — "x,y,z"|"group:<имя>"|"binding:<путь>"; orbit — [yaw, pitch];
+    zoom — множитель fit-дистанции. Незаданные параметры — дефолты сервера
+    (stateless). file — слот. Ответ data: {path?, width, height, stats,
+    camera, render_state, cache, reloaded, session:{file}}.
+    Без GPU (фоновая сессия, нет окна) — ok=false, kind=no_gpu: обходитесь
+    pgg_probe + delve_asset_check.
+    Пример: pgg_render(node="facing", ortho="front").
+    """
+    return _pgg_layer.render(node, file=file, out=out, size=size, ortho=ortho,
+                             target=target, orbit=orbit, zoom=zoom)
+
+
+@mcp.tool()
+def pgg_docs(symbol: str, file: Optional[str] = None) -> dict:
+    """Карточка def'а загруженного .pgg или builtin'а языка PGG.
+
+    symbol — имя def'а слота или builtin'а (сначала def, при промахе —
+    реестр билтинов; явный ``builtin:<name>`` — всегда реестр). file — слот.
+    Ответ data: {symbol, kind, signature, docstring} (def) или {symbol, kind,
+    name, signature, group, summary, example} (builtin); не найден — ok=false,
+    kind=not_found + did-you-mean.
+    Пример: pgg_docs("elem_zone"), pgg_docs("mesh_from_sdf").
+    """
+    return _pgg_layer.docs(symbol, file=file)
 
 
 if __name__ == "__main__":
