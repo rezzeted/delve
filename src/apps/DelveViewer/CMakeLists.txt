@@ -1,10 +1,16 @@
-# DelveViewer: empty Sokol/ImGui window. Sibling of the future CLI; does not
-# link pgg or edgar.
+# DelveViewer: F9 preview — 3D + top view of a filled delve level with an IR
+# overlay. Links the delve pipeline (project/layout/fill) and the shared
+# offscreen pgg preview.
 find_package(imgui CONFIG REQUIRED)
 
 nw_add_console_app(
     GROUP apps/tools
     LIBS
+        pgg
+        pgg_preview
+        delve
+        delve_layout
+        delve_fill
         spdlog::spdlog_header_only
         imgui::imgui
 )
@@ -16,3 +22,18 @@ endif()
 target_include_directories(${AppName} PRIVATE ${SOKOL_INCLUDE_DIRS})
 
 nw_configure_sokol_app(${AppName})
+
+# F9 smoke: the data path (layout or frozen IR -> IR -> fill) without a
+# window. Projects resolve their slots through the FillOpts::delve_assets
+# fallback, so the repo assets dir is found from the executable upward; the
+# working directory only shortens the search.
+# The layout smoke uses the app's own fixture: src/tests/data/d2_project.json
+# can never build an IR (5.2: its corridor role overrides wall_t, so corridor/
+# room shared walls resolve different thicknesses — an F4 error by design).
+add_test(NAME DelveViewer_smoke_layout
+         COMMAND DelveViewer --smoke "${CMAKE_CURRENT_SOURCE_DIR}/smoke_project.json")
+add_test(NAME DelveViewer_smoke_ir
+         COMMAND DelveViewer --smoke "${CMAKE_SOURCE_DIR}/src/tests/data/d1_project.json"
+                 --ir "${CMAKE_SOURCE_DIR}/docs/d0/frozen_ir.json")
+set_tests_properties(DelveViewer_smoke_layout DelveViewer_smoke_ir
+                     PROPERTIES WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")

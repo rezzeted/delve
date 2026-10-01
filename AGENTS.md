@@ -34,6 +34,8 @@ Delve — оркестратор подземелий поверх `thirdparty/p
 
 - Быстрые сьюты (секунды): `delve_ir_test`, `delve_project_test`,
   `delve_layout_test`, `delve_d0_test`, `delve_assets_test` — запускать всегда.
+- Smoke превью (F9): `DelveViewer_smoke_layout` (~3 с) и `DelveViewer_smoke_ir`
+  (~18 с, frozen fill) — headless-прогоны пути данных DelveViewer в ctest.
 - Медленные (Debug + PGG, минуты — это норма, не зависание): `delve_fill_test`
   (~4 мин), `delve_check_test` (~1–2 мин без `DelveCheck.PassFrozen`; сам
   `PassFrozen` очень медленный — запускать отдельно на незагруженной машине).
