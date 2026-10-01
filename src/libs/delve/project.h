@@ -23,8 +23,10 @@ struct RoleEntry {
     std::optional<double> wall_t;  // v1 only (role level); nullopt = project wall_t
     // F12: keys explicitly present in THIS role entry's JSON object (a named
     // entry's own keys only — values prefilled from "*" are not explicit).
-    // Drives the role steps of the provenance chains; empty for hand-built
-    // entries (treated as "no explicit fields").
+    // Drives the role steps of the provenance chains. Programmatic edits of
+    // loaded entries keep exact provenance (the step value is read live), but
+    // a field ADDED this way should also be inserted here, or the chain will
+    // attribute it to a lower level.
     std::set<std::string> set_fields;
 };
 

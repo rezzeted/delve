@@ -483,6 +483,19 @@ TEST(IrJson, RoundTrip) {
     EXPECT_EQ(back.walls.size(), 9u);
     EXPECT_EQ(back.transitions.size(), 4u);
     EXPECT_EQ(back.facings.size(), 10u);
+    // F12: provenance chains survive the roundtrip.
+    ASSERT_FALSE(back.rooms[0].prov.empty());
+    EXPECT_EQ(back.rooms[0].prov.at("h").back().level, "role");
+    const delve::IrFacing* f = findFacing(back, "fac:0:2.1");
+    ASSERT_NE(f, nullptr);
+    ASSERT_EQ(f->prov.at("style").size(), 2u);
+    EXPECT_EQ(f->prov.at("style").back().level, "side");
+    EXPECT_EQ(f->prov.at("style").back().detail, "side_rules[0] (adjacent_role=corridor)");
+    EXPECT_EQ(delve::format_prov(f->prov.at("style")),
+              "brick <- side \"side_rules[0] (adjacent_role=corridor)\" <- role \"*\" (stone)");
+    ASSERT_EQ(back.doors.size(), 1u);
+    EXPECT_EQ(back.doors[0].prov.at("dtype").back().level, "default");  // frozen path
+    EXPECT_EQ(back.transitions[0].prov.at("pattern").back().level, "project");
 }
 
 TEST(IrJson, RejectsOtherFormats) {
@@ -496,6 +509,35 @@ TEST(IrJson, RejectsOtherFormats) {
     EXPECT_NE(err.find("delve-ir/2"), std::string::npos) << err;
     EXPECT_FALSE(delve::read_ir_v2_json(R"({"format": "delve-ir/1"})", ir, err));
     EXPECT_NE(err.find("int room ids"), std::string::npos) << err;  // N7 hint
+}
+
+TEST(IrJson, ReadsV2WithoutProv) {
+    const delve::Project p = loadFixtureProject();
+    const std::string frozen_path = std::string(DELVE_TEST_DATA) + "/corner_frozen.json";
+    delve::IrV2 ir;
+    std::string err;
+    ASSERT_TRUE(delve::build_ir_v2(readFile(frozen_path), frozen_path, p, "test", ir, err)) << err;
+    std::string text;
+    ASSERT_TRUE(delve::write_ir_v2_json(ir, text, err)) << err;
+    // A delve-ir/2 file (no prov keys anywhere) stays readable (N7); chains
+    // come out empty.
+    auto doc = nlohmann::ordered_json::parse(text);
+    doc["format"] = "delve-ir/2";
+    for (auto& r : doc.at("rooms")) r.erase("prov");
+    for (auto& f : doc.at("facings")) f.erase("prov");
+    for (auto& n : doc.at("nodes"))
+        for (auto& f : n.at("faces")) f.erase("prov");
+    for (auto& d : doc.at("doors")) d.erase("prov");
+    for (auto& t : doc.at("transitions")) t.erase("prov");
+    delve::IrV2 back;
+    ASSERT_TRUE(delve::read_ir_v2_json(doc.dump(), back, err)) << err;
+    ASSERT_EQ(back.rooms.size(), ir.rooms.size());
+    EXPECT_TRUE(back.rooms[0].prov.empty());
+    EXPECT_TRUE(back.facings[0].prov.empty());
+    EXPECT_TRUE(back.doors[0].prov.empty());
+    // Geometry is unaffected.
+    EXPECT_EQ(back.walls.size(), ir.walls.size());
+    EXPECT_EQ(back.transitions.size(), ir.transitions.size());
 }
 
 TEST(Seeds, Stable31Bit) {
@@ -622,6 +664,11 @@ TEST(IrFromLayout, MatchesFrozenPath) {
     auto jb = nlohmann::ordered_json::parse(tb);
     ja.erase("source");  // provenance differs by construction
     jb.erase("source");
+    // The dtype chain level also differs by construction: the frozen path has
+    // no passage edges (fixed open = default), the layout path cites the
+    // passage. Everything else must be byte-identical.
+    for (auto& d : ja.at("doors")) d.at("prov").erase("dtype");
+    for (auto& d : jb.at("doors")) d.at("prov").erase("dtype");
     EXPECT_EQ(ja.dump(), jb.dump());  // byte-identical IR from both paths
 }
 
@@ -629,6 +676,8 @@ TEST(IrFromLayout, DoorTypeLengthAndThickness) {
     delve::Project p = loadD1AsV1(abGraph());
     p.fill.roles["hall"].wall_t = 0.5;  // equal on both sides: legal (5.2)
     p.fill.roles["crypt"].wall_t = 0.5;
+    p.fill.roles["hall"].set_fields.insert("wall_t");  // F12: mark explicit (see RoleEntry)
+    p.fill.roles["crypt"].set_fields.insert("wall_t");
     delve::LayoutData ld;
     std::string err;
     ASSERT_TRUE(delve::read_layout_json(abLayoutText(), ld, err)) << err;
@@ -675,6 +724,8 @@ TEST(IrFromLayout, SharedWallThicknessMismatch) {
     delve::Project p = loadD1AsV1(abGraph());
     p.fill.roles["hall"].wall_t = 0.5;
     p.fill.roles["crypt"].wall_t = 0.7;
+    p.fill.roles["hall"].set_fields.insert("wall_t");  // F12: mark explicit (see RoleEntry)
+    p.fill.roles["crypt"].set_fields.insert("wall_t");
     delve::LayoutData ld;
     std::string err;
     ASSERT_TRUE(delve::read_layout_json(abLayoutText(), ld, err)) << err;
@@ -682,6 +733,9 @@ TEST(IrFromLayout, SharedWallThicknessMismatch) {
     EXPECT_FALSE(delve::build_ir_from_layout(ld, p, "test", ir, err));
     EXPECT_NE(err.find("rooms a and b"), std::string::npos) << err;
     EXPECT_NE(err.find("5.2"), std::string::npos) << err;
+    // F12: the error shows where each side's wall_t comes from.
+    EXPECT_NE(err.find("a wall_t: 0.5 <- role \"hall\""), std::string::npos) << err;
+    EXPECT_NE(err.find("b wall_t: 0.7 <- role \"crypt\""), std::string::npos) << err;
 }
 
 TEST(IrFromLayout, FillOverridesReachIR) {
@@ -714,6 +768,23 @@ TEST(IrFromLayout, FillOverridesReachIR) {
     EXPECT_EQ(ir.rooms[0].style, "brick");
     ASSERT_FALSE(ir.facings.empty());
     for (const auto& f : ir.facings) EXPECT_EQ(f.style, "brick") << f.id;
+    // F12: the chains explain where each value came from.
+    const auto& prov = ir.rooms[0].prov;
+    ASSERT_EQ(prov.at("h").size(), 2u);  // the template overrides style only
+    EXPECT_EQ(prov.at("h")[0].level, "role");
+    EXPECT_EQ(prov.at("h")[0].detail, "*");
+    EXPECT_EQ(prov.at("h")[1].level, "room");
+    EXPECT_EQ(prov.at("h")[1].detail, "h");
+    EXPECT_EQ(prov.at("h")[1].value, "3.5");
+    EXPECT_EQ(delve::format_prov(prov.at("h")), "3.5 <- room \"h\" <- role \"*\" (3)");
+    ASSERT_EQ(prov.at("style").size(), 2u);
+    EXPECT_EQ(prov.at("style")[1].level, "template");
+    EXPECT_EQ(prov.at("style")[1].detail, "grand");
+    EXPECT_EQ(prov.at("style")[1].value, "brick");
+    EXPECT_EQ(delve::format_prov(prov.at("style")), "brick <- template \"grand\" <- role \"*\" (stone)");
+    // Facings: the base chain without side rules (cleared above).
+    ASSERT_FALSE(ir.facings[0].prov.at("style").empty());
+    EXPECT_EQ(ir.facings[0].prov.at("style").back().value, "brick");
 }
 
 TEST(IrFromLayout, FiguredConcaveCorner) {

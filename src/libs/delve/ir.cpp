@@ -319,6 +319,7 @@ struct RoomInput {
     std::vector<DoorInput> doors;
     double h = 0, wall_t = 0;  // resolved fill (4.2)
     std::string style, floor_style, ceil_style;
+    std::map<std::string, ProvChain> prov;  // F12: chains of the resolved values
 };
 
 // Contour edge of a room: axis line (vert, coord), span [t0, t1], t0 < t1.
@@ -393,6 +394,7 @@ bool build_core(const Project& project, const std::vector<RoomInput>& frooms,
         r.style = fr.style;
         r.floor_style = fr.floor_style;
         r.ceil_style = fr.ceil_style;
+        r.prov = fr.prov;
         ir.rooms.push_back(std::move(r));
     }
 
@@ -560,10 +562,15 @@ bool build_core(const Project& project, const std::vector<RoomInput>& frooms,
         if (!w.outer) {
             const double tl = room_of(w.room_left).wall_t, tr = room_of(w.room_right).wall_t;
             if (!(tl == tr)) {
+                // F12: the error shows where each side's wall_t comes from.
                 err = err_path + ": rooms " + w.room_left + " and " + w.room_right +
                       " resolve different wall thicknesses (" + fmt_num(tl) + " vs " +
                       fmt_num(tr) + ") for their shared wall " + w.id +
-                      " [5.2; align wall_t on both roles/templates/rooms]";
+                      " [5.2; align wall_t on both roles/templates/rooms]" +
+                      "\n  " + w.room_left +
+                      " wall_t: " + format_prov(ir.rooms[room_idx[w.room_left]].prov["wall_t"]) +
+                      "\n  " + w.room_right +
+                      " wall_t: " + format_prov(ir.rooms[room_idx[w.room_right]].prov["wall_t"]);
                 return false;
             }
         }
@@ -644,9 +651,11 @@ bool build_core(const Project& project, const std::vector<RoomInput>& frooms,
             if (f.room.empty()) {
                 f.h = ir.rooms[room_idx[node.owner]].h;
                 f.style = ir.rooms[room_idx[node.owner]].style;
+                f.prov["style"] = ir.rooms[room_idx[node.owner]].prov["style"];
             } else {
                 f.h = ir.rooms[room_idx[f.room]].h;
                 f.style = ir.rooms[room_idx[f.room]].style;  // joint pass refines T/concave faces
+                f.prov["style"] = ir.rooms[room_idx[f.room]].prov["style"];
             }
             node.faces.push_back(std::move(f));
         }
@@ -740,6 +749,15 @@ bool build_core(const Project& project, const std::vector<RoomInput>& frooms,
         door.frame = project.fill.frame;
         door.thick = wall.thick;
         door.dtype = dtype;
+        // F12: dtype from the passage edge (layout) / fixed open (frozen);
+        // h/frame are project fill values; thick is the owner's wall_t.
+        if (ir.from_layout)
+            door.prov["dtype"] = ProvChain{{"passage", ra + "-" + rb, std::to_string(dtype)}};
+        else
+            door.prov["dtype"] = ProvChain{{"default", "", std::to_string(dtype)}};
+        door.prov["h"] = ProvChain{{"project", "", fmt_num(door.h)}};
+        door.prov["frame"] = ProvChain{{"project", "", fmt_num(door.frame)}};
+        door.prov["thick"] = ir.rooms[room_idx[wall.owner]].prov["wall_t"];
         const int len_cells = std::abs(dd1.first - dd0.first) + std::abs(dd1.second - dd0.second);
         door.clear = len_cells * cell - 2.0 * door.frame;  // §5.3
         if (!(door.clear > 0.0)) {
@@ -839,8 +857,15 @@ bool build_core(const Project& project, const std::vector<RoomInput>& frooms,
                 f.wall = wid;
                 f.room = fr.id;
                 const std::string adj_role = outer ? "" : room_of(other).role;
-                // 4.2 side level over the resolved room base style.
-                f.style = apply_side_rules(project, fr.style, outer, adj_role);
+                // 4.2 side level over the resolved room base style; the chain
+                // is the room's style chain plus the fired side rules (F12).
+                const SideResolution side = apply_side_rules_prov(project, fr.style, outer, adj_role);
+                f.style = side.style;
+                f.prov["style"] = ir.rooms[room_idx[fr.id]].prov["style"];
+                for (const int idx : side.fired)
+                    f.prov["style"].push_back(
+                        {"side", side_rule_detail(project, idx),
+                         project.fill.side_rules[idx].style});
                 // Walk-frame geometry: walk start/end (grid). The side normal
                 // points INTO the room (slots §2.3 "наружная нормаль стороны":
                 // outward from the wall body) = right of the CW walk.
@@ -1003,13 +1028,14 @@ bool build_core(const Project& project, const std::vector<RoomInput>& frooms,
                     return false;
                 }
                 face.style = ir.facings[jt.facing_in].style;  // A; transitions refine below
+                face.prov["style"] = ir.facings[jt.facing_in].prov["style"];
             } else if (jt.concave) {
                 const std::string& nid = node_id_at.at(jt.t_vertex);
                 IrNode& node = ir.nodes[node_idx[jt.t_vertex]];
-                const std::pair<GridPt, std::string> refinements[2] = {
-                    {jt.c_normal_in, ir.facings[jt.facing_in].style},
-                    {jt.c_normal_out, ir.facings[jt.facing_out].style}};
-                for (const auto& [nrm, style] : refinements) {
+                const std::pair<GridPt, size_t> refinements[2] = {
+                    {jt.c_normal_in, jt.facing_in},
+                    {jt.c_normal_out, jt.facing_out}};
+                for (const auto& [nrm, fi] : refinements) {
                     const auto fit = face_idx.find({nid, nrm});
                     if (fit == face_idx.end()) {
                         err = err_path + ": internal: concave face missing at " +
@@ -1022,7 +1048,8 @@ bool build_core(const Project& project, const std::vector<RoomInput>& frooms,
                               " looks into room " + face.room;
                         return false;
                     }
-                    face.style = style;
+                    face.style = ir.facings[fi].style;
+                    face.prov["style"] = ir.facings[fi].prov["style"];
                 }
             }
         }
@@ -1058,6 +1085,9 @@ bool build_core(const Project& project, const std::vector<RoomInput>& frooms,
         t.pattern = zone_pattern;
         t.width = zone_w;
         t.place = zone_place;
+        t.prov["pattern"] = ProvChain{{"project", "", project.fill.transitions.pattern}};
+        t.prov["width"] = ProvChain{{"project", "", fmt_num(zone_w)}};
+        t.prov["place"] = ProvChain{{"project", "", zone_place}};
         t.seed = zone_seed(t.id);
         // Unclipped zone on the development.
         double zs0, zs1;
@@ -1277,12 +1307,16 @@ bool build_ir_v2(const std::string& frozen_json, const std::string& frozen_path,
         in.role = room_role(fr.corridor);  // v0 mapping (corridor | hall)
         in.grid = fr.grid;
         // v0 hierarchy: project -> role (4.2); uniform project wall_t.
-        const RoleEntry e = resolve_role(project, in.role);
-        in.h = e.h;
-        in.style = e.style;
-        in.floor_style = e.floor;
-        in.ceil_style = e.ceil;
+        const RoleProvenance e = resolve_role_prov(project, in.role);
+        in.h = e.entry.h;
+        in.style = e.entry.style;
+        in.floor_style = e.entry.floor;
+        in.ceil_style = e.entry.ceil;
         in.wall_t = project.fill.wall_t;
+        in.prov = e.prov;
+        // The frozen path forces the uniform project wall_t (ir_v2.md): the
+        // chain says where the value actually comes from.
+        in.prov["wall_t"] = ProvChain{{"project", "", fmt_num(project.fill.wall_t)}};
         for (const auto& d : fr.doors)
             in.doors.push_back({std::to_string(d.to), d.d0, d.d1, 1});  // always open (§9.1)
         inputs.push_back(std::move(in));
@@ -1359,15 +1393,19 @@ bool build_ir_from_layout(const LayoutData& layout, const Project& project,
         // 4.2: room -> template -> role -> project. Parametric templates carry
         // no override; unknown template names are treated as parametric.
         const FillOverride* tov = nullptr;
-        if (const auto it = templates.find(lr.tmpl); it != templates.end())
+        std::string tmpl_name;
+        if (const auto it = templates.find(lr.tmpl); it != templates.end()) {
             tov = &it->second->fill;
+            tmpl_name = lr.tmpl;
+        }
         const FillOverride* rov = gr.fill.empty() ? nullptr : &gr.fill;
-        const ResolvedFill rf = resolve_room_fill(project, gr.role, tov, rov);
+        const ResolvedFill rf = resolve_room_fill(project, gr.role, tov, rov, tmpl_name, gr.id);
         in.h = rf.h;
         in.wall_t = rf.wall_t;
         in.style = rf.style;
         in.floor_style = rf.floor;
         in.ceil_style = rf.ceil;
+        in.prov = rf.prov;
         for (const auto& d : lr.doors) {
             if (!graph.count(d.to)) {
                 err = path + ": layout room \"" + lr.id + "\": door to \"" + d.to +
@@ -1450,6 +1488,18 @@ bool write_ir_v2_json(const IrV2& ir, std::string& text_out, std::string& err) {
     auto j_room = [](const std::string& id) {
         return id.empty() ? nlohmann::ordered_json(nullptr) : nlohmann::ordered_json(id);
     };
+    // F12: provenance chains, emitted only when present (additive; /2 files
+    // and older readers simply lack/ignore the key).
+    auto jprov = [](const std::map<std::string, ProvChain>& prov) {
+        nlohmann::ordered_json j = nlohmann::ordered_json::object();
+        for (const auto& [field, chain] : prov) {
+            nlohmann::ordered_json steps = nlohmann::ordered_json::array();
+            for (const auto& s : chain)
+                steps.push_back({{"level", s.level}, {"detail", s.detail}, {"value", s.value}});
+            j[field] = std::move(steps);
+        }
+        return j;
+    };
     nlohmann::ordered_json doc;
     doc["format"] = kIrFormat;
     if (ir.from_layout)
@@ -1461,14 +1511,16 @@ bool write_ir_v2_json(const IrV2& ir, std::string& text_out, std::string& err) {
     for (const auto& r : ir.rooms) {
         nlohmann::ordered_json jgrid = nlohmann::ordered_json::array();
         for (const auto& p : r.grid) jgrid.push_back({p.first, p.second});
-        jrooms.push_back({{"id", r.id},
-                          {"corridor", r.corridor},
-                          {"role", r.role},
-                          {"grid", std::move(jgrid)},
-                          {"h", r.h},
-                          {"style", r.style},
-                          {"floor", r.floor_style},
-                          {"ceil", r.ceil_style}});
+        nlohmann::ordered_json jr = {{"id", r.id},
+                                     {"corridor", r.corridor},
+                                     {"role", r.role},
+                                     {"grid", std::move(jgrid)},
+                                     {"h", r.h},
+                                     {"style", r.style},
+                                     {"floor", r.floor_style},
+                                     {"ceil", r.ceil_style}};
+        if (!r.prov.empty()) jr["prov"] = jprov(r.prov);
+        jrooms.push_back(std::move(jr));
     }
     doc["rooms"] = std::move(jrooms);
     nlohmann::ordered_json jwalls = nlohmann::ordered_json::array();
@@ -1499,16 +1551,18 @@ bool write_ir_v2_json(const IrV2& ir, std::string& text_out, std::string& err) {
             jcuts.push_back({{"seg", {{c.a.first, c.a.second}, {c.b.first, c.b.second}}}, {"h", c.h}});
         nlohmann::ordered_json jzones = nlohmann::ordered_json::array();
         for (const auto& z : f.zones) jzones.push_back(jpiece(z));
-        jfac.push_back({{"id", f.id},
-                        {"wall", f.wall},
-                        {"room", f.room},
-                        {"style", f.style},
-                        {"seg", {{f.from.first, f.from.second}, {f.to.first, f.to.second}}},
-                        {"n", {f.n.first, f.n.second}},
-                        {"h", f.h},
-                        {"cuts", std::move(jcuts)},
-                        {"zones", std::move(jzones)},
-                        {"s", {f.s0, f.s1}}});
+        nlohmann::ordered_json jf = {{"id", f.id},
+                                     {"wall", f.wall},
+                                     {"room", f.room},
+                                     {"style", f.style},
+                                     {"seg", {{f.from.first, f.from.second}, {f.to.first, f.to.second}}},
+                                     {"n", {f.n.first, f.n.second}},
+                                     {"h", f.h},
+                                     {"cuts", std::move(jcuts)},
+                                     {"zones", std::move(jzones)},
+                                     {"s", {f.s0, f.s1}}};
+        if (!f.prov.empty()) jf["prov"] = jprov(f.prov);
+        jfac.push_back(std::move(jf));
     }
     doc["facings"] = std::move(jfac);
     nlohmann::ordered_json jnodes = nlohmann::ordered_json::array();
@@ -1517,12 +1571,14 @@ bool write_ir_v2_json(const IrV2& ir, std::string& text_out, std::string& err) {
         for (const auto& f : n.faces) {
             nlohmann::ordered_json jzones = nlohmann::ordered_json::array();
             for (const auto& z : f.zones) jzones.push_back(jpiece(z));
-            jfaces.push_back({{"center", {f.center.first, f.center.second}},
-                              {"n", {f.n.first, f.n.second}},
-                              {"room", j_room(f.room)},
-                              {"h", f.h},
-                              {"style", f.style},
-                              {"zones", std::move(jzones)}});
+            nlohmann::ordered_json jf = {{"center", {f.center.first, f.center.second}},
+                                         {"n", {f.n.first, f.n.second}},
+                                         {"room", j_room(f.room)},
+                                         {"h", f.h},
+                                         {"style", f.style},
+                                         {"zones", std::move(jzones)}};
+            if (!f.prov.empty()) jf["prov"] = jprov(f.prov);
+            jfaces.push_back(std::move(jf));
         }
         jnodes.push_back({{"id", n.id},
                           {"owner", n.owner},
@@ -1533,29 +1589,35 @@ bool write_ir_v2_json(const IrV2& ir, std::string& text_out, std::string& err) {
     }
     doc["nodes"] = std::move(jnodes);
     nlohmann::ordered_json jdoors = nlohmann::ordered_json::array();
-    for (const auto& d : ir.doors)
-        jdoors.push_back({{"id", d.id},
-                          {"rooms", {d.room_a, d.room_b}},
-                          {"wall", d.wall},
-                          {"grid", {{d.g0.first, d.g0.second}, {d.g1.first, d.g1.second}}},
-                          {"clear_seg", {{d.from.first, d.from.second}, {d.to.first, d.to.second}}},
-                          {"clear", d.clear},
-                          {"h", d.h},
-                          {"frame", d.frame},
-                          {"thick", d.thick},
-                          {"dtype", d.dtype}});
+    for (const auto& d : ir.doors) {
+        nlohmann::ordered_json jd = {{"id", d.id},
+                                     {"rooms", {d.room_a, d.room_b}},
+                                     {"wall", d.wall},
+                                     {"grid", {{d.g0.first, d.g0.second}, {d.g1.first, d.g1.second}}},
+                                     {"clear_seg", {{d.from.first, d.from.second}, {d.to.first, d.to.second}}},
+                                     {"clear", d.clear},
+                                     {"h", d.h},
+                                     {"frame", d.frame},
+                                     {"thick", d.thick},
+                                     {"dtype", d.dtype}};
+        if (!d.prov.empty()) jd["prov"] = jprov(d.prov);
+        jdoors.push_back(std::move(jd));
+    }
     doc["doors"] = std::move(jdoors);
     nlohmann::ordered_json jtrans = nlohmann::ordered_json::array();
-    for (const auto& t : ir.transitions)
-        jtrans.push_back({{"id", t.id},
-                          {"room", t.room},
-                          {"styles", {t.style_a, t.style_b}},
-                          {"pattern", t.pattern},
-                          {"width", t.width},
-                          {"place", t.place},
-                          {"s", {t.s0, t.s1}},
-                          {"seed", t.seed},
-                          {"shortened", t.shortened}});
+    for (const auto& t : ir.transitions) {
+        nlohmann::ordered_json jt = {{"id", t.id},
+                                     {"room", t.room},
+                                     {"styles", {t.style_a, t.style_b}},
+                                     {"pattern", t.pattern},
+                                     {"width", t.width},
+                                     {"place", t.place},
+                                     {"s", {t.s0, t.s1}},
+                                     {"seed", t.seed},
+                                     {"shortened", t.shortened}};
+        if (!t.prov.empty()) jt["prov"] = jprov(t.prov);
+        jtrans.push_back(std::move(jt));
+    }
     doc["transitions"] = std::move(jtrans);
     nlohmann::ordered_json jwarn = nlohmann::ordered_json::array();
     for (const auto& w : ir.warnings) jwarn.push_back(w);
@@ -1619,6 +1681,17 @@ bool j_room_ref(const nlohmann::json& j, std::string& out) {
     return true;
 }
 
+// F12: optional "prov" object (additive; absent -> empty chains).
+void j_prov(const nlohmann::json& j, std::map<std::string, ProvChain>& out) {
+    out.clear();
+    if (!j.contains("prov")) return;
+    for (const auto& [field, steps] : j.at("prov").items())
+        for (const auto& s : steps)
+            out[field].push_back(ProvStep{s.at("level").get<std::string>(),
+                                          s.at("detail").get<std::string>(),
+                                          s.at("value").get<std::string>()});
+}
+
 }  // namespace
 
 bool read_ir_v2_json(const std::string& text, IrV2& out, std::string& err) {
@@ -1666,6 +1739,7 @@ bool read_ir_v2_json(const std::string& text, IrV2& out, std::string& err) {
             r.style = jr.at("style").get<std::string>();
             r.floor_style = jr.at("floor").get<std::string>();
             r.ceil_style = jr.at("ceil").get<std::string>();
+            j_prov(jr, r.prov);
             ir.rooms.push_back(std::move(r));
         }
         for (const auto& jw : doc.at("walls")) {
@@ -1715,6 +1789,7 @@ bool read_ir_v2_json(const std::string& text, IrV2& out, std::string& err) {
             }
             f.s0 = jf.at("s").at(0).get<double>();
             f.s1 = jf.at("s").at(1).get<double>();
+            j_prov(jf, f.prov);
             ir.facings.push_back(std::move(f));
         }
         for (const auto& jn : doc.at("nodes")) {
@@ -1736,6 +1811,7 @@ bool read_ir_v2_json(const std::string& text, IrV2& out, std::string& err) {
                     if (!j_piece(jz, p)) throw std::runtime_error("bad zone piece");
                     f.zones.push_back(p);
                 }
+                j_prov(jf, f.prov);
                 n.faces.push_back(std::move(f));
             }
             ir.nodes.push_back(std::move(n));
@@ -1757,6 +1833,7 @@ bool read_ir_v2_json(const std::string& text, IrV2& out, std::string& err) {
             d.frame = jd.at("frame").get<double>();
             d.thick = jd.at("thick").get<double>();
             d.dtype = jd.at("dtype").get<int>();
+            j_prov(jd, d.prov);
             ir.doors.push_back(std::move(d));
         }
         for (const auto& jt : doc.at("transitions")) {
@@ -1772,6 +1849,7 @@ bool read_ir_v2_json(const std::string& text, IrV2& out, std::string& err) {
             t.s1 = jt.at("s").at(1).get<double>();
             t.seed = jt.at("seed").get<int>();
             t.shortened = jt.at("shortened").get<bool>();
+            j_prov(jt, t.prov);
             ir.transitions.push_back(std::move(t));
         }
         for (const auto& jw : doc.at("warnings")) ir.warnings.push_back(jw.get<std::string>());

@@ -34,6 +34,9 @@ struct IrRoom {
     std::vector<GridPt> grid;  // CCW-normalized contour (area2 < 0), world grid coords
     double h = 0;
     std::string style, floor_style, ceil_style;
+    // F12: resolution chains of h, style, floor, ceil, wall_t (§4.2; wall_t
+    // lives only here and in walls/nodes). Empty for read /2 files.
+    std::map<std::string, ProvChain> prov;
 };
 
 // One wall body unit (§5.2): a contour-edge atom split at every T-vertex.
@@ -82,6 +85,8 @@ struct IrFacing {
     std::vector<Cut> cuts;  // walk order
     std::vector<ZonePiece> zones;  // ascending l
     double s0 = 0, s1 = 0;  // development interval, meters
+    // F12: style chain = the room's style chain + fired side-rule steps.
+    std::map<std::string, ProvChain> prov;
 };
 
 // One open pillar face (slots §2.4), node-local coords (origin = pillar
@@ -93,6 +98,8 @@ struct IrNodeFace {
     double h = 0;  // looked-into room height (void: owner h)
     std::string style;  // looked-into side style (void: owner style)
     std::vector<ZonePiece> zones;  // ascending l (l = 0 at face center)
+    // F12: style chain (copy of the looked-into room's / flank facing's).
+    std::map<std::string, ProvChain> prov;
 };
 
 struct IrNode {
@@ -113,6 +120,8 @@ struct IrDoor {
     double clear = 0;  // clear width, meters (door_len * cell - 2 * frame)
     double h = 0, frame = 0, thick = 0;
     int dtype = 1;  // frozen path: always open; layout path: passage door code
+    // F12: dtype (passage | default), h/frame (project), thick (owner wall_t).
+    std::map<std::string, ProvChain> prov;
 };
 
 struct IrTransition {
@@ -125,6 +134,8 @@ struct IrTransition {
     double s0 = 0, s1 = 0;  // final (possibly shortened) zone on the development
     int seed = 0;  // zone rng, derived from the id
     bool shortened = false;
+    // F12: pattern, width, place (one project step each).
+    std::map<std::string, ProvChain> prov;
 };
 
 struct IrV2 {
