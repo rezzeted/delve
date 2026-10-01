@@ -181,6 +181,57 @@ TEST(Catalog, RoomDescriptions) {
     EXPECT_FALSE(desc.at("hall").is_corridor());
 }
 
+TEST(Catalog, CorridorWidthRegenerates) {
+    // F2 acceptance (§7): changing the corridor width in the project changes
+    // the parametric corridor templates; explicit templates stay untouched.
+    delve::layout::Catalog c2;
+    {
+        const delve::Project p = loadFixture();
+        std::string err;
+        ASSERT_TRUE(delve::layout::build_catalog(p, c2, err)) << err;
+    }
+    delve::layout::Catalog c3;
+    {
+        delve::Project p;
+        std::string err;
+        ASSERT_TRUE(loadText(surgery(fixture(), "\"width\": 2, \"length\": [3, 4]",
+                                     "\"width\": 3, \"length\": [3, 4]"),
+                             p, err))
+            << err;
+        ASSERT_TRUE(delve::layout::build_catalog(p, c3, err)) << err;
+    }
+    // Parametric corridors regenerated at the new width (names carry it).
+    ASSERT_NE(findEntry(c2, "corridor_2x3"), nullptr);
+    ASSERT_NE(findEntry(c2, "corridor_2x4"), nullptr);
+    EXPECT_EQ(findEntry(c3, "corridor_2x3"), nullptr);
+    EXPECT_EQ(findEntry(c3, "corridor_2x4"), nullptr);
+    ASSERT_NE(findEntry(c3, "corridor_3x3"), nullptr);
+    ASSERT_NE(findEntry(c3, "corridor_3x4"), nullptr);
+    // The width is baked into the contour: outlines must differ.
+    const auto outlinesEqual = [](const delve::layout::CatalogEntry& a,
+                                  const delve::layout::CatalogEntry& b) {
+        const auto& pa = a.edgar.outline().points();
+        const auto& pb = b.edgar.outline().points();
+        if (pa.size() != pb.size()) return false;
+        for (size_t i = 0; i < pa.size(); ++i)
+            if (pa[i].x != pb[i].x || pa[i].y != pb[i].y) return false;
+        return true;
+    };
+    EXPECT_FALSE(outlinesEqual(*findEntry(c2, "corridor_2x3"), *findEntry(c3, "corridor_3x3")));
+    // Rects and the explicit template are byte-for-byte the same entries.
+    for (const char* name : {"rect_4x4", "rect_4x5", "rect_5x4", "rect_5x5", "grand_hall"}) {
+        const auto* a = findEntry(c2, name);
+        const auto* b = findEntry(c3, name);
+        ASSERT_NE(a, nullptr) << name;
+        ASSERT_NE(b, nullptr) << name;
+        EXPECT_TRUE(outlinesEqual(*a, *b)) << name;
+        EXPECT_EQ(a->roles, b->roles) << name;
+        EXPECT_EQ(a->edgar.allowed_transformations(), b->edgar.allowed_transformations()) << name;
+        EXPECT_EQ(a->fill.style, b->fill.style) << name;
+        EXPECT_EQ(a->parametric, b->parametric) << name;
+    }
+}
+
 TEST(Catalog, V0ProjectRejected) {
     delve::Project p;
     std::string err;

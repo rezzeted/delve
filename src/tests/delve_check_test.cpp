@@ -524,6 +524,51 @@ TEST(DelveCheck, GenerateFiguredLevelEndToEnd) {
     EXPECT_TRUE(delve::check_level(ir, q, fill, ds)) << diagText(ds);
 }
 
+// D2 acceptance (§11): changing the corridor width re-lays the level out and
+// passability still holds (check_level includes passage/opening minimums).
+TEST(DelveCheck, CorridorWidthChangeKeepsPassage) {
+    {
+        delve::Project p = loadD2ChainProject();
+        const delve::IrV2 ir = generateIr(p);
+        const delve::FillResult fill = fillIr(ir, p);
+        std::vector<delve::CheckDiag> ds;
+        ASSERT_TRUE(delve::check_level(ir, p, fill, ds)) << diagText(ds);
+    }
+    const std::string base = readFile(std::string(DELVE_TEST_DATA) + "/d2_project.json");
+    std::string text = surgery(base, ", \"wall_t\": 0.5", "");
+    text = surgery(text, "\"width\": 2, \"length\": [3, 4]", "\"width\": 3, \"length\": [3, 4]");
+    delve::Project q;
+    std::string err;
+    ASSERT_TRUE(loadText(text, q, err)) << err;
+    q.dir = std::filesystem::path(DELVE_ASSETS_DIR).parent_path().string();
+
+    delve::layout::Catalog cat;
+    ASSERT_TRUE(delve::layout::build_catalog(q, cat, err)) << err;
+    delve::layout::LayoutGenerator gen;
+    delve::layout::LayoutResult lr;
+    delve::layout::GenerateOptions opts;
+    opts.attempts = 4;
+    ASSERT_TRUE(gen.generate(q, cat, opts, lr, err)) << err;
+    std::string ltext;
+    ASSERT_TRUE(delve::layout::write_layout_json(lr, q, "chain", ltext, err)) << err;
+    delve::LayoutData ld;
+    ASSERT_TRUE(delve::read_layout_json(ltext, ld, err)) << err;
+    // The corridor room adopted a 3-wide parametric template.
+    bool saw_wide = false;
+    for (const auto& r : ld.rooms)
+        if (r.id == "c1") {
+            EXPECT_EQ(r.tmpl.rfind("corridor_3x", 0), 0u) << r.tmpl;
+            saw_wide = true;
+        }
+    ASSERT_TRUE(saw_wide) << "corridor room c1 missing from the layout";
+
+    delve::IrV2 ir3;
+    ASSERT_TRUE(delve::build_ir_from_layout(ld, q, "chain", ir3, err)) << err;
+    const delve::FillResult fill3 = fillIr(ir3, q);
+    std::vector<delve::CheckDiag> ds3;
+    EXPECT_TRUE(delve::check_level(ir3, q, fill3, ds3)) << diagText(ds3);
+}
+
 }  // namespace
 
 // Regression probe: the gate door variant must not carry coincident faces
