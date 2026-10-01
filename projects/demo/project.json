@@ -1,0 +1,70 @@
+{
+  "format": "delve-project/1",
+  "seed": 11,
+  "layout": {
+    "corridors": {"width": 2, "length": [3, 5]},
+    "rooms_rect": {"w": [3, 6], "h": [3, 6], "roles": ["entry", "crypt", "stairs"]},
+    "door_length": 1,
+    "door_corner_distance": 1,
+    "min_room_distance": 0,
+    "catalog_budget": 128,
+    "rooms": [
+      {"id": "entry", "role": "entry"},
+      {"id": "c1", "role": "corridor"},
+      {"id": "hall", "role": "hall"},
+      {"id": "c2", "role": "corridor"},
+      {"id": "crypt", "role": "crypt"},
+      {"id": "c3", "role": "corridor"},
+      {"id": "vault", "role": "hall", "tags": ["treasure"]},
+      {"id": "stairs", "role": "stairs", "fill": {"h": 4.0}}
+    ],
+    "passages": [
+      {"a": "entry", "b": "c1", "door": "open"},
+      {"a": "c1", "b": "hall", "door": "open"},
+      {"a": "hall", "b": "c2", "door": "open"},
+      {"a": "c2", "b": "crypt", "door": "gate"},
+      {"a": "hall", "b": "c3", "door": "open"},
+      {"a": "c3", "b": "vault", "door": "gate"},
+      {"a": "hall", "b": "stairs", "door": "open"}
+    ],
+    "templates": [
+      {"name": "vault_L", "roles": ["hall"],
+       "contour": [[0, 0], [10, 0], [10, 6], [4, 6], [4, 4], [0, 4]],
+       "doors": "simple",
+       "transforms": ["identity", "rot90", "rot180", "rot270"],
+       "fill": {"h": 3.6}}
+    ]
+  },
+  "fill": {
+    "cell": 2.0,
+    "wall_t": 0.6,
+    "min_passage": 1.2,
+    "min_opening": 0.8,
+    "room_h": 3.0,
+    "door_h": 2.2,
+    "frame": 0.15,
+    "lamp_step": 4.0,
+    "row_module": 0.25,
+    "roles": {
+      "*": {"h": 3.0, "style": "stone", "floor": "stone", "ceil": "plain"},
+      "corridor": {"h": 2.6, "style": "brick", "floor": "brick", "ceil": "plain"},
+      "entry": {"h": 2.8, "style": "stone", "floor": "stone", "ceil": "plain"},
+      "crypt": {"h": 2.4, "style": "stone", "floor": "stone", "ceil": "plain"},
+      "stairs": {"h": 3.4, "style": "brick", "floor": "brick", "ceil": "plain"}
+    },
+    "transitions": {"pattern": "chase", "width": 1.0, "place": "corner"},
+    "side_rules": [
+      {"match": {"adjacent_role": "corridor"}, "style": "brick"},
+      {"match": {"side": "outer"}, "style": "stone"}
+    ]
+  },
+  "slots": {
+    "room_fill": "rooms/fill_v1.pgg",
+    "wall_body": "walls/body_v1.pgg",
+    "facing": "walls/facing_v1.pgg",
+    "node": "walls/node_v1.pgg",
+    "door": "doors/opening_v1.pgg",
+    "decor:lamp": "decor/lamp_v1.pgg"
+  },
+  "asset_roots": ["assets"]
+}

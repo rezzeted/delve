@@ -15,7 +15,8 @@ Delve — оркестратор подземелий поверх `thirdparty/p
 Раскладка: `src/libs/delve` (проект/граф/IR), `src/libs/delve_layout` (F2/F3),
 `src/libs/delve_fill` (F6), `src/libs/delve_check` (F11), `src/libs/delve_d0` (D0,
 замороженный IR); тесты `src/tests/delve_*_test.cpp` + данные `src/tests/data`;
-слот-ассеты `assets/`; доки `docs/`.
+слот-ассеты `assets/`; доки `docs/`; демо-проекты `projects/` (превью в
+DelveViewer, см. `projects/demo/README.md`).
 
 ## Сабмодули
 

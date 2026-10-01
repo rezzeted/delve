@@ -12,6 +12,10 @@ smoke-прогона в ctest (`DelveViewer_smoke_layout`, `DelveViewer_smoke_ir
 DelveViewer [project.json [--ir frozen.json]] [--smoke]
 ```
 
+Быстрый старт: `DelveViewer projects/demo/project.json` — демо-подземелье из
+репозитория (L-зал, ворота, переходы камень|кирпич; см.
+`projects/demo/README.md`).
+
 - Без аргументов: открывается окно с пустым состоянием; проект открывается из
   панели Open (поле пути + список недавних за сессию, опциональное поле
   IR-файла) или drag-and-drop .json на окно. Кнопка Open неактивна, пока поле
