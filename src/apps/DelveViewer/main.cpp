@@ -32,6 +32,7 @@
 #include <pgg/src/eval/topology_util.h>
 
 #include "GeometryPreview.h"
+#include "filedialog.h"
 #include "level.h"
 #include "panel.h"
 
@@ -80,6 +81,7 @@ Level g_level;
 // Open panel state (empty state and "open another" share it).
 char g_projectBuf[1024] = {};
 char g_irBuf[1024] = {};
+FileDialog g_projectDlg, g_irDlg;  // one instance per field: session dir memory
 std::vector<std::pair<std::string, std::string>> g_recent;  // (project, ir), newest first
 std::string g_lastOpenDir;  // parent of the last opened project (relative-path fallback)
 
@@ -358,16 +360,27 @@ void focusBBox(const glm::vec3& mn, const glm::vec3& mx) {
 
 // --- panels ------------------------------------------------------------------
 
-// Shared body of the open panel: path fields, the session recent list, the
-// Open button and the last load error. Enter in either field opens too.
+// Shared body of the open panel: path fields with Browse dialogs, the session
+// recent list, the Open button (disabled while the project field is empty)
+// and the last load error. Enter in either field opens too.
 void drawOpenControls() {
     bool open = false;
-    ImGui::SetNextItemWidth(-1.0f);
+    ImGui::SetNextItemWidth(-78.0f);
     open |= ImGui::InputTextWithHint("##project", "project.json", g_projectBuf, sizeof(g_projectBuf),
                                      ImGuiInputTextFlags_EnterReturnsTrue);
-    ImGui::SetNextItemWidth(-1.0f);
+    ImGui::SameLine();
+    if (ImGui::Button("Browse...##p")) {
+        g_irDlg.open = false;  // one modal at a time
+        fileDialogOpen(g_projectDlg, g_projectBuf);
+    }
+    ImGui::SetNextItemWidth(-78.0f);
     open |= ImGui::InputTextWithHint("##ir", "frozen IR json (optional; empty = generate layout)",
                                      g_irBuf, sizeof(g_irBuf), ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::SameLine();
+    if (ImGui::Button("Browse...##i")) {
+        g_projectDlg.open = false;
+        fileDialogOpen(g_irDlg, g_irBuf);
+    }
     if (!g_recent.empty()) {
         if (ImGui::BeginCombo("##recent", "recent projects")) {
             for (const auto& [proj, ir] : g_recent) {
@@ -380,7 +393,10 @@ void drawOpenControls() {
             ImGui::EndCombo();
         }
     }
+    const bool hasProject = !trimCopy(g_projectBuf).empty();
+    if (!hasProject) ImGui::BeginDisabled();
     open |= ImGui::Button("Open");
+    if (!hasProject) ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::TextDisabled("or drop .json files onto the window");
     if (open) openFromPanel();
@@ -491,6 +507,14 @@ void drawSidePanel(int h) {
         if (g_log.empty()) ImGui::TextDisabled("(empty)");
         ImGui::EndChild();
     }
+
+    // Modal file dialogs of the Browse buttons (drawn every frame while open;
+    // the chosen path only fills the field — Open stays a separate action).
+    std::string picked;
+    if (fileDialogDraw(g_projectDlg, "Open project", picked))
+        std::snprintf(g_projectBuf, sizeof(g_projectBuf), "%s", picked.c_str());
+    if (fileDialogDraw(g_irDlg, "Open frozen IR", picked))
+        std::snprintf(g_irBuf, sizeof(g_irBuf), "%s", picked.c_str());
     ImGui::End();
 }
 
