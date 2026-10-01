@@ -66,3 +66,14 @@ target_compile_features(delve_check_test PRIVATE cxx_std_20)
 set_property(TARGET delve_check_test PROPERTY FOLDER tests)
 
 add_test(NAME delve_check_test COMMAND delve_check_test)
+
+add_executable(delve_export_test delve_export_test.cpp)
+target_link_libraries(delve_export_test PRIVATE GTest::gtest_main delve_export nlohmann_json::nlohmann_json)
+target_compile_definitions(delve_export_test PRIVATE
+    DELVE_TEST_DATA="${CMAKE_SOURCE_DIR}/src/tests/data"
+    DELVE_D0_DIR="${CMAKE_SOURCE_DIR}/docs/d0"
+    DELVE_ASSETS_DIR="${CMAKE_SOURCE_DIR}/assets")
+target_compile_features(delve_export_test PRIVATE cxx_std_20)
+set_property(TARGET delve_export_test PROPERTY FOLDER tests)
+
+add_test(NAME delve_export_test COMMAND delve_export_test)
