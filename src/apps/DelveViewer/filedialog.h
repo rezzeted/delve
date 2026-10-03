@@ -23,8 +23,10 @@ struct FileDialog {
 };
 
 // Opens the dialog: at the parent of currentValue when set, else at the
-// session-remembered directory of this instance, else at the cwd.
-void fileDialogOpen(FileDialog& st, const std::string& currentValue);
+// session-remembered directory of this instance, else at fallbackDir when it
+// is a directory, else at the cwd.
+void fileDialogOpen(FileDialog& st, const std::string& currentValue,
+                    const std::string& fallbackDir = {});
 
 // Draws the modal while open. On Select / double-click / Enter writes the
 // chosen path to outPath and returns true (once). Cancel / Esc just closes.

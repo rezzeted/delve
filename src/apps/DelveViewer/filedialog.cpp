@@ -66,11 +66,13 @@ void gotoDir(FileDialog& st, const fs::path& dir) {
 
 }  // namespace
 
-void fileDialogOpen(FileDialog& st, const std::string& currentValue) {
+void fileDialogOpen(FileDialog& st, const std::string& currentValue,
+                    const std::string& fallbackDir) {
     std::error_code ec;
     fs::path dir;
     if (!currentValue.empty()) dir = fs::path(currentValue).parent_path();
     if (dir.empty() && !st.dir.empty()) dir = st.dir;  // session memory
+    if (dir.empty()) dir = fs::path(fallbackDir);      // caller default (first open)
     if (dir.empty() || !fs::is_directory(dir, ec)) dir = fs::current_path(ec);
     gotoDir(st, dir);
     if (!currentValue.empty()) {

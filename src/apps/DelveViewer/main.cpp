@@ -84,6 +84,7 @@ char g_irBuf[1024] = {};
 FileDialog g_projectDlg, g_irDlg;  // one instance per field: session dir memory
 std::vector<std::pair<std::string, std::string>> g_recent;  // (project, ir), newest first
 std::string g_lastOpenDir;  // parent of the last opened project (relative-path fallback)
+std::string g_projectsDir;  // first-open dir of the project Browse dialog (<root>/projects)
 
 GeometryPreview g_preview3d;
 GeometryPreview g_previewTop;
@@ -371,7 +372,7 @@ void drawOpenControls() {
     ImGui::SameLine();
     if (ImGui::Button("Browse...##p")) {
         g_irDlg.open = false;  // one modal at a time
-        fileDialogOpen(g_projectDlg, g_projectBuf);
+        fileDialogOpen(g_projectDlg, g_projectBuf, g_projectsDir);
     }
     ImGui::SetNextItemWidth(-78.0f);
     open |= ImGui::InputTextWithHint("##ir", "frozen IR json (optional; empty = generate layout)",
@@ -568,6 +569,8 @@ void init() {
     g_preview3d.init();
     g_previewTop.init();
     g_previewTop.setProjection(PreviewProjection::OrthoTop);
+
+    g_projectsDir = resolve_delve_projects(g_argv0);
 
     if (!g_projectArg.empty()) openLevel(g_projectArg, g_irArg);
 }

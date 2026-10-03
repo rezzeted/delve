@@ -45,3 +45,7 @@ struct Level {
 // then walk up from the executable's directory, then from the project file's
 // directory. Empty when not found.
 std::string resolve_delve_assets(const std::string& argv0, const std::string& projectPath);
+
+// Default dir of the project Browse dialog: <root>/projects next to the
+// located assets library. Empty when no assets root matched.
+std::string resolve_delve_projects(const std::string& argv0);

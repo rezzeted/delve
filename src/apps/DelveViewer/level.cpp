@@ -88,6 +88,14 @@ std::string resolve_delve_assets(const std::string& argv0, const std::string& pr
     return {};
 }
 
+std::string resolve_delve_projects(const std::string& argv0) {
+    const std::string assets = resolve_delve_assets(argv0, "");
+    if (assets.empty()) return {};
+    std::error_code ec;
+    const fs::path projects = fs::path(assets).parent_path() / "projects";
+    return fs::is_directory(projects, ec) ? projects.string() : std::string{};
+}
+
 bool Level::readFrozenIr(const std::string& path, std::string& err) {
     std::string text;
     if (!readTextFile(path, text)) {
