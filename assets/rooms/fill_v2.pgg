@@ -1,8 +1,10 @@
 # Delve slot asset: room_fill v2 (slots §2.1). Stone-tile floor with accent
-# patterns (medallion / border / cross, rng-picked), optional ceiling
-# (style_ceil == 0 skips it: no-roof iso rooms), barrel cluster for
-# halls/crypts. Light anchor only with a ceiling; spawn for halls.
-# v2 keeps the v1 RECT-only limit (tiles follow the bbox grid).
+# patterns (medallion / border / cross, rng-picked) clipped to the room
+# contour — figured plans (L, cross) get the floor, the mortar bed and the
+# ceiling only inside the walls. Optional ceiling (style_ceil == 0 skips it:
+# no-roof iso rooms). Barrel cluster for halls/crypts hugs an rng-picked
+# polygon vertex (convex or concave — never outside the walls).
+# Light anchor only with a ceiling; spawn for halls.
 
 import codes as c
 import props
@@ -30,11 +32,6 @@ pat_rng = split_rng(root, key = "pattern")
 bar_rng = split_rng(root, key = "barrels")
 variant = value(random_int(4, rng = pat_rng), on = mesh_line(count = 1, length = 0.0))
 
-# Mortar bed under the tiles; its top sits 0.5 mm below the tile bottoms.
-bed = transform(box(size = vec3(sx, 0.16, sz), res = 1), translate = vec3(cx, 0.0 - 0.1205, cz))
-bed_s = set(bed, "style", style_floor, domain = points)
-bed_mesh = set(bed_s, "Cd", c.style_color_mortar(style = style_floor), domain = points)
-
 pitch = 0.5
 tile = 0.46
 nx = int(floor(sx / pitch))
@@ -44,12 +41,37 @@ oz = cz - f32(nz) * pitch * 0.5
 base_col = c.style_color(style = style_floor)
 accent_col = c.style_color(style = c.ST_BRICK())
 
-tiles = repeat (empty_mesh(), iterations = nx * nz) |acc| {
+# Tile centers over the bbox pitch grid, clipped by the contour. A kept
+# center overhangs the polygon edge by <= half a tile (0.23 m); the wall
+# (thick/2 = 0.3 m) covers it. The grid id rides along for the pattern
+# areas and the Cd jitter below.
+cand = repeat (empty_points(), iterations = nx * nz) |acc| {
     e = @iteration
-    i = e % nx
-    j = e / nx
-    tx = ox + (f32(i) + 0.5) * pitch
-    tz = oz + (f32(j) + 0.5) * pitch
+    p0 = transform(mesh_line(count = 1, length = 0.0),
+                   translate = vec3(ox + (f32(e % nx) + 0.5) * pitch, 0.0,
+                                    oz + (f32(e / nx) + 0.5) * pitch))
+    acc = merge(acc, set(p0, "id", e, domain = points))
+}
+kept = delete(cand, where = !inside_polygon(contour))
+
+# Mortar bed and ceiling slab per kept cell: both clip like the floor (the
+# ceiling slab only exists when the room has a ceiling at all).
+bed = foreach cell in kept {
+    tx = dot(value(@P, on = cell), (1, 0, 0))
+    tz = dot(value(@P, on = cell), (0, 0, 1))
+    bb = transform(box(size = vec3(pitch, 0.16, pitch), res = 1), translate = vec3(tx, 0.0 - 0.1205, tz))
+    bs = set(bb, "style", style_floor, domain = points)
+    bed_tile = set(bs, "Cd", c.style_color_mortar(style = style_floor), domain = points)
+    cb = transform(box(size = vec3(pitch, 0.2, pitch), res = 1), translate = vec3(tx, h + 0.1, tz))
+    cs = set(cb, "style", style_ceil, domain = points)
+    ceil_tile = set(cs, "Cd", c.style_color(style = style_ceil), domain = points)
+    cell = merge(bed_tile, select(style_ceil != 0, a = ceil_tile, b = empty_mesh()))
+}
+
+tiles = foreach cell in kept {
+    e = value(@id, on = cell)
+    tx = dot(value(@P, on = cell), (1, 0, 0))
+    tz = dot(value(@P, on = cell), (0, 0, 1))
     dxc = tx - cx
     dzc = tz - cz
     dc = sqrt(dxc * dxc + dzc * dzc)
@@ -62,47 +84,57 @@ tiles = repeat (empty_mesh(), iterations = nx * nz) |acc| {
     tm = transform(tb, translate = vec3(tx, 0.0 - 0.02, tz))
     ti = set(tm, "id", e, domain = points)
     ts = set(ti, "style", style_floor, domain = points)
-    tc = set(ts, "Cd", accent ? accent_col : base_col, domain = points)
-    acc = merge(acc, tc)
+    cell = set(ts, "Cd", accent ? accent_col : base_col, domain = points)
 }
 
 hv = sin(f32(@id) * 12.9898) * 43758.5453
 jit = 0.94 + (hv - floor(hv)) * 0.12
 tiles_c = set(tiles, "Cd", @Cd * jit, domain = points)
 
-ceil_bare = transform(box(size = vec3(sx, 0.2, sz), res = 1), translate = vec3(cx, h + 0.1, cz))
-ceil_s = set(ceil_bare, "style", style_ceil, domain = points)
-ceil_mesh = set(ceil_s, "Cd", c.style_color(style = style_ceil), domain = points)
-ceil_part = select(style_ceil != 0, a = ceil_mesh, b = empty_mesh())
-
-# Barrel cluster in an rng-picked corner (halls/crypts): L-shaped pile of up
-# to 3, centers 0.5 m off the walls, 0.78 m apart along them.
+# Barrel cluster (halls/crypts): L-pile of up to 3 at an rng-picked polygon
+# vertex, hugging the two walls of its corner. The probe decides which side
+# of the edges is the room (convex corner: +edges; concave 270°: -edges), so
+# the pile never lands outside the walls. Reaching 0.62+0.78 m along a wall
+# it neither blocks a doorway (doors start >= 2 m from every corner) nor
+# sinks into a wall face (barrel r <= 0.32; wall face at thick/2 = 0.3).
 is_store = (role == c.RL_HALL()) | (role == c.RL_CRYPT())
 nb = 1 + value(random_int(3, rng = bar_rng), on = mesh_line(count = 1, length = 0.0))
-csel = value(random_int(4, rng = split_rng(bar_rng, key = "corner")), on = mesh_line(count = 1, length = 0.0))
-sxn = csel % 2 == 0 ? 1.0 : 0.0 - 1.0
-szn = csel < 2 ? 1.0 : 0.0 - 1.0
-corner_x = sxn > 0.0 ? dot(hi, (1, 0, 0)) : dot(lo, (1, 0, 0))
-corner_z = szn > 0.0 ? dot(hi, (0, 0, 1)) : dot(lo, (0, 0, 1))
+nv = count(contour)
+csel = value(random_int(nv, rng = split_rng(bar_rng, key = "corner")), on = mesh_line(count = 1, length = 0.0))
+pv = value(@P, on = contour, where = @index == csel)
+pn = value(@P, on = contour, where = @index == (csel + 1) % nv)
+pp = value(@P, on = contour, where = @index == (csel + nv - 1) % nv)
+e1 = normalize(pn - pv)
+e2 = normalize(pp - pv)
+probe_plus = transform(mesh_line(count = 1, length = 0.0), translate = pv + (e1 + e2) * 0.62)
+sgn = value(inside_polygon(contour), on = probe_plus) ? 1.0 : 0.0 - 1.0
+nook = pv + (e1 + e2) * (sgn * 0.62)
 b0 = props.barrel(rng = bar_rng)
 barrels = repeat (empty_mesh(), iterations = nb) |acc| {
     k = @iteration
     ax = 0.62 + 0.78 * (k == 1 ? 1.0 : 0.0)
     az = 0.62 + 0.78 * (k == 2 ? 1.0 : 0.0)
     yaw = f32((k * 53 + csel * 17) % 360)
-    bm = transform(b0, rotate = vec3(0.0, yaw, 0.0), translate = vec3(corner_x - sxn * ax, 0.0, corner_z - szn * az))
+    bm = transform(b0, rotate = vec3(0.0, yaw, 0.0), translate = pv + e1 * (sgn * ax) + e2 * (sgn * az))
     acc = merge(acc, bm)
 }
 barrel_part = select(is_store, a = barrels, b = empty_mesh())
 
-mesh = merge(bed_mesh, tiles_c, ceil_part, barrel_part)
+mesh = merge(bed, tiles_c, barrel_part)
 
-lamp0 = transform(mesh_line(count = 1, length = 0.0), translate = vec3(cx, h - 0.3, cz))
+# Anchors sit at the bbox center when it is inside the room (rects, crosses);
+# otherwise they fall back to the barrel nook, which is always inside.
+center_probe = transform(mesh_line(count = 1, length = 0.0), translate = vec3(cx, 0.0, cz))
+center_ok = value(inside_polygon(contour), on = center_probe)
+ax0 = center_ok ? cx : dot(nook, (1, 0, 0))
+az0 = center_ok ? cz : dot(nook, (0, 0, 1))
+
+lamp0 = transform(mesh_line(count = 1, length = 0.0), translate = vec3(ax0, h - 0.3, az0))
 lamp1 = set(lamp0, "kind", c.AK_LIGHT(), domain = points)
 lamp2 = set(lamp1, "dir", vec3(0.0, 0.0 - 1.0, 0.0), domain = points, typeinfo = vector)
 lamp = set(lamp2, "range", 6.0, domain = points)
 
-spawn0 = transform(mesh_line(count = 1, length = 0.0), translate = vec3(cx, 0.0, cz))
+spawn0 = transform(mesh_line(count = 1, length = 0.0), translate = vec3(ax0, 0.0, az0))
 spawn1 = set(spawn0, "kind", c.AK_SPAWN(), domain = points)
 spawn2 = set(spawn1, "dir", vec3(0.0, 0.0, 1.0), domain = points, typeinfo = vector)
 spawn = set(spawn2, "range", 0.0, domain = points)

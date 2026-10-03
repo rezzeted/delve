@@ -5,12 +5,14 @@
 #include <gtest/gtest.h>
 
 #include <cctype>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <map>
 #include <regex>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -65,6 +67,32 @@ const pgg::RunOutput* findOutput(const pgg::RunResult& r, const std::string& nam
     return nullptr;
 }
 
+// Even-odd point-in-polygon in the XZ plan (y ignored), as inside_polygon.
+bool insidePolygonXZ(const std::vector<std::pair<double, double>>& poly, double x, double z) {
+    bool inside = false;
+    for (size_t i = 0, j = poly.size() - 1; i < poly.size(); j = i++) {
+        const auto [xi, zi] = poly[i];
+        const auto [xj, zj] = poly[j];
+        if ((zi > z) != (zj > z) && x < (xj - xi) * (z - zi) / (zj - zi) + xi) inside = !inside;
+    }
+    return inside;
+}
+
+double distToPolygonXZ(const std::vector<std::pair<double, double>>& poly, double x, double z) {
+    double best = 1e300;
+    for (size_t i = 0, j = poly.size() - 1; i < poly.size(); j = i++) {
+        const auto [xi, zi] = poly[i];
+        const auto [xj, zj] = poly[j];
+        const double dx = xj - xi, dz = zj - zi;
+        const double len2 = dx * dx + dz * dz;
+        double t = len2 > 0.0 ? ((x - xi) * dx + (z - zi) * dz) / len2 : 0.0;
+        t = std::max(0.0, std::min(1.0, t));
+        const double px = xi + t * dx - x, pz = zi + t * dz - z;
+        best = std::min(best, px * px + pz * pz);
+    }
+    return std::sqrt(best);
+}
+
 struct AssetCase {
     const char* asset;    // relative to DELVE_ASSETS_DIR
     const char* fixture;  // relative to DELVE_ASSETS_DIR
@@ -76,6 +104,7 @@ TEST(DelveAssets, AutonomyRA4) {
     const std::vector<AssetCase> cases = {
         {"rooms/fill_v1.pgg", "rooms/fill_v1.fixture.json", 2},
         {"rooms/fill_v2.pgg", "rooms/fill_v2.fixture.json", 1},
+        {"rooms/fill_v2.pgg", "rooms/fill_v2.cross.fixture.json", 1},
         {"walls/body_v1.pgg", "walls/body_v1.fixture.json", 0},
         {"walls/facing_v1.pgg", "walls/facing_v1.fixture.json", 0},
         {"walls/node_v1.pgg", "walls/node_v1.fixture.json", 0},
@@ -114,6 +143,27 @@ TEST(DelveAssets, AutonomyRA4) {
         EXPECT_GT(pgg::asGeo(mesh->value)->pointCount(), 0u);
         EXPECT_EQ(pgg::asGeo(anchors->value)->kind, pgg::GeoKind::Points);
         EXPECT_EQ(pgg::asGeo(anchors->value)->pointCount(), c.anchors);
+
+        // Room units are clipped to the inner volume: every mesh point lies
+        // inside the contour polygon or within the wall cover of its edge
+        // (floor overhang <= half a tile, 0.25 m; margin is generous).
+        if (fixture["params"].contains("contour")) {
+            const std::string ref = fixture["params"]["contour"].get<std::string>();
+            ASSERT_TRUE(ref.rfind("@", 0) == 0) << c.fixture << ": contour must be an @file ref";
+            const nlohmann::json pts =
+                nlohmann::json::parse(readFile(fixtureDir + "/" + ref.substr(1)));
+            std::vector<std::pair<double, double>> poly;
+            for (const auto& p : pts["positions"])
+                poly.emplace_back(p[0].get<double>(), p[2].get<double>());
+            ASSERT_GE(poly.size(), 3u);
+            const pgg::GeoPtr meshGeo = pgg::asGeo(mesh->value);
+            ASSERT_NE(meshGeo->positions, nullptr);
+            for (const glm::vec3& p : *meshGeo->positions) {
+                if (insidePolygonXZ(poly, p.x, p.z)) continue;
+                EXPECT_LE(distToPolygonXZ(poly, p.x, p.z), 0.35 + 1e-4)
+                    << c.fixture << ": point outside contour (" << p.x << ", " << p.z << ")";
+            }
+        }
     }
 }
 
