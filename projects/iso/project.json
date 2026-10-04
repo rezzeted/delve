@@ -17,7 +17,7 @@
       {"id": "c3", "role": "corridor"},
       {"id": "vault", "role": "hall", "tags": ["treasure"]},
       {"id": "c4", "role": "corridor"},
-      {"id": "stairs", "role": "stairs", "fill": {"h": 3.2}}
+      {"id": "stairs", "role": "stairs"}
     ],
     "passages": [
       {"a": "entry", "b": "c1", "door": "open"},
@@ -33,8 +33,7 @@
       {"name": "vault_L", "roles": ["hall"],
        "contour": [[0, 0], [10, 0], [10, 6], [4, 6], [4, 4], [0, 4]],
        "doors": "simple",
-       "transforms": ["identity", "rot90", "rot180", "rot270"],
-       "fill": {"h": 3.2}},
+       "transforms": ["identity", "rot90", "rot180", "rot270"]},
       {"name": "crypt_cross", "roles": ["crypt"],
        "contour": [[3, 0], [6, 0], [6, 3], [9, 3], [9, 6], [6, 6], [6, 9], [3, 9], [3, 6], [0, 6], [0, 3], [3, 3]],
        "doors": "simple",
@@ -54,9 +53,9 @@
     "row_module": 0.25,
     "roles": {
       "*": {"h": 2.8, "style": "sandstone", "floor": "sandstone", "ceil": "none"},
-      "corridor": {"h": 2.6, "style": "brick", "floor": "brick", "ceil": "none"},
-      "crypt": {"h": 2.4, "style": "stone", "floor": "stone", "ceil": "none"},
-      "stairs": {"h": 3.0, "style": "sandstone", "floor": "sandstone", "ceil": "none"}
+      "corridor": {"style": "brick", "floor": "brick", "ceil": "none"},
+      "crypt": {"style": "stone", "floor": "stone", "ceil": "none"},
+      "stairs": {"style": "sandstone", "floor": "sandstone", "ceil": "none"}
     },
     "transitions": {"pattern": "chase", "width": 1.0, "place": "corner"},
     "side_rules": [

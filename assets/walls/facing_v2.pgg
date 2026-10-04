@@ -4,7 +4,10 @@
 # clipped afterwards), but the element is a beveled block (lib.parts.cbox)
 # instanced on an anchor cloud: per-block palette color (ashlar.pgg) baked
 # into @tint, micro scale jitter opening mortar joints to the wall core, fbm
-# mottle over the placed mesh. Elements protrude to local -Z as in v1 (into
+# mottle over the placed mesh. The courses stop one row under the wall_body
+# cap band; the freed strip [rows*module, h - 0.24] carries a two-step
+# cornice (zone-styled ledge slabs, 3 mm shadow gaps between all tiers).
+# Elements protrude to local -Z as in v1 (into
 # the room, D2.3b). Cd stays on points (the level merge is one domain, E609).
 
 import codes as c
@@ -43,7 +46,7 @@ bond_rng = split_rng(root, key = "bond")
 fbm_rng = split_rng(root, key = "fbm")
 go_left = value(random_int(2, rng = bond_rng), on = mesh_line(count = 1, length = 0.0))
 
-rows = int(floor(h / module))
+rows = int(floor((h - 0.24) / module)) - 1
 elem_len = module * 2.0
 depth = 0.07
 cols = int(floor(L / elem_len)) + 1
@@ -87,7 +90,40 @@ coursed = repeat (empty_mesh(), iterations = 5) |acc| {
     acc = merge(acc, set(cls, "style", k, domain = points))
 }
 
-placed = transform(coursed, rotate = vec3(0.0, yaw, 0.0), translate = base)
+# Cornice (галтель): two stepped ledge rows between the courses and the body
+# cap band (the band owns [h - 0.24, h]). The courses STOP below the cornice
+# and every tier is separated by a 3 mm shadow gap — a shared vertical plane
+# (door cut, wall end) then never cuts two tiers in overlapping y-ranges
+# (F11/elements flags such same-normal pairs). Fronts at 0.095/0.12 m stand
+# proud of the block faces (0.07..0.082) and of the cap face (0.09); backs
+# embed 0.01 into the wall core. Zone-styled like the blocks.
+ncr = max(1, int(L / 0.62))
+crw = L / f32(ncr)
+cb_a = f32(rows) * module + 0.003
+ct_a = h - 0.243
+cm_a = (cb_a + ct_a) * 0.5
+cornice = repeat (empty_mesh(), iterations = ncr * 2) |acc| {
+    e = @iteration
+    i = e / 2
+    row = e % 2
+    dp = row == 0 ? 0.095 : 0.12
+    y0c = row == 0 ? cb_a : cm_a + 0.0015
+    y1c = row == 0 ? cm_a - 0.0015 : ct_a
+    x0 = crw * f32(i)
+    x1 = x0 + crw
+    code = z.elem_zone(own = style, x0 = x0, x1 = x1, y0 = y0c, y1 = y1c, zones = zones)
+    erng = split_rng(root, key = 700 + e)
+    sj = value(random(0.95, 1.0, rng = split_rng(erng, key = "sx")), on = mesh_line(count = 1, length = 0.0))
+    shade = value(random(0.75, 1.08, rng = split_rng(erng, key = "shade")), on = mesh_line(count = 1, length = 0.0))
+    mot = value(fbm(scale = 1.6, octaves = 2, rng = split_rng(erng, key = "mot")), on = mesh_line(count = 1, length = 0.0))
+    slab = parts.cbox(size = vec3(crw * sj, y1c - y0c, dp + 0.01), k = 0.0, k_abs = 0.008)
+    slp = transform(slab, translate = vec3((x0 + x1) * 0.5, (y0c + y1c) * 0.5, 0.01 - (dp + 0.01) * 0.5))
+    slt = set(slp, "tint", a.ashlar_color(style = code, shade = shade * 0.90, mot = mot), domain = points)
+    sls = set(slt, "style", code, domain = points)
+    acc = merge(acc, select(code >= 0, a = sls, b = empty_mesh()))
+}
+
+placed = transform(merge(coursed, cornice), rotate = vec3(0.0, yaw, 0.0), translate = base)
 
 carved = repeat (placed, iterations = count(cuts) / 2) |acc| {
     i = @iteration

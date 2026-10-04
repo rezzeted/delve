@@ -1,10 +1,14 @@
 # Delve slot asset: wall_body v2 (slots §2.2). Mortar-core beam between pillar
-# faces with clipped door openings (lintels above). Same geometry as v1; the
-# core color comes from the ashlar palette (darker joints behind the v2
-# facing blocks). Deterministic (no rng use).
+# faces with clipped door openings (lintels above), crowned by a cap band of
+# big beveled stones (lib.parts.cbox, ashlar palette): per-stone length/height/
+# depth jitter opens dark mortar joints down to the beam top. The beam is
+# shortened to H - cap_h + 0.02 so every cap embeds 0.02 into it, and cap side
+# faces stand 20 mm proud of the v2 facing blocks — no coplanar face pairs.
+# The band owns [H - 0.24, H]; the facing/node cornice rows live just below.
 
 import codes as c
 import ashlar as a
+import lib.parts as parts
 
 def slot_version() -> (out: int) {
     out = 1
@@ -36,9 +40,11 @@ dir = p1 - p0
 L = length(dir)
 u = dir / L
 H = max(h_a, h_b)
+cap_h = 0.24
+beam_h = H - cap_h + 0.02
 mid = (p0 + p1) * 0.5
 yaw = degrees(atan2(0.0 - dot(dir, (0, 0, 1)), dot(dir, (1, 0, 0))))
-beam = transform(box(size = vec3(L, H, thick), res = 1), rotate = vec3(0.0, yaw, 0.0), translate = vec3(dot(mid, (1, 0, 0)), H * 0.5, dot(mid, (0, 0, 1))))
+beam = transform(box(size = vec3(L, beam_h, thick), res = 1), rotate = vec3(0.0, yaw, 0.0), translate = vec3(dot(mid, (1, 0, 0)), beam_h * 0.5, dot(mid, (0, 0, 1))))
 
 carved = repeat (beam, iterations = count(cuts) / 2) |acc| {
     i = @iteration
@@ -54,8 +60,33 @@ carved = repeat (beam, iterations = count(cuts) / 2) |acc| {
     acc = carve(g = acc, origin_a = p0 + u * lo, origin_b = p0 + u * hi, axis = u, open_h = oh)
 }
 
+# Cap band: hewn stones ~1.1 m long (much bigger than the 0.5 m facing
+# blocks), tops uneven by jitter; bottoms embed 0.02 into the beam. First
+# stone starts 2+ cm into the node cap volume — intersecting, not coplanar.
+probe = mesh_line(count = 1, length = 0.0)
+root = rng_from_seed(rng_seed)
+ncap = max(1, int(L / 1.1))
+cw = L / f32(ncap)
+caps_l = repeat (empty_mesh(), iterations = ncap) |acc| {
+    i = @iteration
+    erng = split_rng(root, key = 500 + i)
+    sj = value(random(0.93, 1.0, rng = split_rng(erng, key = "sx")), on = probe)
+    hj = value(random(0.90, 1.0, rng = split_rng(erng, key = "sy")), on = probe)
+    dj = value(random(0.0, 0.02, rng = split_rng(erng, key = "sz")), on = probe)
+    shade = value(random(0.78, 1.12, rng = split_rng(erng, key = "shade")), on = probe)
+    mot = value(fbm(scale = 1.6, octaves = 2, rng = split_rng(erng, key = "mot")), on = probe)
+    hh = cap_h * hj
+    stone = parts.cbox(size = vec3(cw * sj, hh, thick + 0.18 + dj), k = 0.0, k_abs = 0.02)
+    stp = transform(stone, translate = vec3(cw * (f32(i) + 0.5), H - cap_h + hh * 0.5, 0.0))
+    stc = set(stp, "Cd", a.ashlar_color(style = style, shade = shade * 0.95, mot = mot), domain = points)
+    acc = merge(acc, set(stc, "style", style, domain = points))
+}
+caps = transform(caps_l, rotate = vec3(0.0, yaw, 0.0), translate = vec3(dot(p0, (1, 0, 0)), 0.0, dot(p0, (0, 0, 1))))
+
 mesh_s = set(carved, "style", style, domain = points)
-mesh = set(mesh_s, "Cd", a.mortar_color(style = style, mot = 0.45), domain = points)
+core = set(mesh_s, "Cd", a.mortar_color(style = style, mot = 0.45), domain = points)
+joint = merge(core, caps)
+mesh = compute_normals(remove_attr(unmark(joint, "edge"), "N"), mode = smooth)
 anchors = empty_points()
 
 output mesh
