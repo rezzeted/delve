@@ -40,8 +40,8 @@ DelveViewer, см. `projects/demo/README.md`).
 - Быстрые сьюты (секунды): `delve_ir_test`, `delve_project_test`,
   `delve_layout_test`, `delve_d0_test`, `delve_assets_test`,
   `delve_export_test` (~26 с, один frozen fill) — запускать всегда.
-- Smoke превью (F9): `DelveViewer_smoke_layout` (~3 с) и `DelveViewer_smoke_ir`
-  (~18 с, frozen fill) — headless-прогоны пути данных DelveViewer в ctest.
+- Smoke превью (F9): `DelveViewer_smoke_layout` (~3 с) — headless-прогон пути
+  данных DelveViewer (раскладка → IR → fill) в ctest.
 - Smoke машинной петли (F10): `DelveCli_smoke_validate/layout/export/check/
   errors` (~25 с суммарно) — команды DelveCli, включая негативный путь D101.
 - Smoke демона (MCP): `DelveServe_smoke` (~12 с, тёплая петля, asset_check,

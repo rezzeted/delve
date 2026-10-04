@@ -2,12 +2,11 @@
 // overlay (room ids, doors, wall/node owners, anchors), top-view picking with
 // a provenance info panel, unit highlight/solo, and refill/re-layout over the
 // F8 unit cache.
-//   DelveViewer [project.json [--ir frozen.json]] [--smoke]
+//   DelveViewer [project.json] [--smoke]
 // No arguments: the window opens empty; a project is opened from the side
-// panel (path field + recent list) or by dragging .json files onto the window
-// (a project alone, or a project and its frozen IR together). Without --ir
-// the layout is generated from the project's layout tier (attempts=4); with
-// --ir a frozen delve-ir/0|2|3 file is read instead.
+// panel (path field + recent list) or by dragging the project .json onto the
+// window. The layout is always generated from the project's layout tier
+// (attempts=4); frozen IR files are a DelveCli input, not the viewer's.
 // --smoke runs the same data path without a window (ctest), prints one stats
 // line and exits 0. Exit codes: 0 ok, 1 data error, 2 usage error.
 // v1 limits: picking only in the top view, anchors only in the overlay.
@@ -73,16 +72,14 @@ bool g_imguiOk = false;
 
 std::string g_argv0;
 std::string g_projectArg;
-std::string g_irArg;
 std::string g_loadError;
 
 Level g_level;
 
-// Open panel state (empty state and "open another" share it).
+// Generate panel state (empty state and "another project" share it).
 char g_projectBuf[1024] = {};
-char g_irBuf[1024] = {};
-FileDialog g_projectDlg, g_irDlg;  // one instance per field: session dir memory
-std::vector<std::pair<std::string, std::string>> g_recent;  // (project, ir), newest first
+FileDialog g_projectDlg;  // session dir memory
+std::vector<std::string> g_recent;  // projects, newest first
 std::string g_lastOpenDir;  // parent of the last opened project (relative-path fallback)
 std::string g_projectsDir;  // first-open dir of the project Browse dialog (<root>/projects)
 
@@ -90,6 +87,7 @@ GeometryPreview g_preview3d;
 GeometryPreview g_previewTop;
 PreviewPaneRect g_rect3d, g_rectTop;
 OverlayLayers g_layers;
+int g_activeView = 0;  // 0 = 3D (default tab), 1 = Top
 
 Selection g_selection;
 std::string g_selectedUnit;     // row selected in the units panel
@@ -193,11 +191,10 @@ void resetViewState() {
     g_soloUnit.clear();
 }
 
-// Session MRU of successfully opened (project, ir) pairs, newest first.
-void rememberRecent(const std::string& proj, const std::string& ir) {
-    const std::pair<std::string, std::string> entry(proj, ir);
-    g_recent.erase(std::remove(g_recent.begin(), g_recent.end(), entry), g_recent.end());
-    g_recent.insert(g_recent.begin(), entry);
+// Session MRU of successfully opened projects, newest first.
+void rememberRecent(const std::string& proj) {
+    g_recent.erase(std::remove(g_recent.begin(), g_recent.end(), proj), g_recent.end());
+    g_recent.insert(g_recent.begin(), proj);
     if (g_recent.size() > 8) g_recent.resize(8);
 }
 
@@ -224,11 +221,10 @@ std::string trimCopy(std::string s) {
     return s.substr(b, e - b);
 }
 
-void openLevel(const std::string& projRaw, const std::string& irRaw) {
+void openLevel(const std::string& projRaw) {
     const std::string proj = resolveInputPath(projRaw);
-    const std::string ir = resolveInputPath(irRaw);
     std::string err;
-    if (!g_level.load(proj, ir, resolve_delve_assets(g_argv0, proj), err)) {
+    if (!g_level.load(proj, resolve_delve_assets(g_argv0, proj), err)) {
         g_loadError = err;
         logLine("load failed: " + err, true);
         return;
@@ -237,14 +233,13 @@ void openLevel(const std::string& projRaw, const std::string& irRaw) {
     resetViewState();
     rebuildPreviews(true);
     logLine(fillSummary("load"));
-    rememberRecent(proj, ir);
+    rememberRecent(proj);
     std::snprintf(g_projectBuf, sizeof(g_projectBuf), "%s", proj.c_str());
-    std::snprintf(g_irBuf, sizeof(g_irBuf), "%s", ir.c_str());
     g_lastOpenDir = std::filesystem::path(proj).parent_path().string();
 }
 
 // Back to the empty state: the level (and its unit cache) goes away, the
-// previews are cleared, the open panel stays as it was.
+// previews are cleared, the generate panel stays as it was.
 void closeLevel() {
     g_level = Level{};
     resetViewState();
@@ -256,10 +251,10 @@ void closeLevel() {
     logLine("level closed");
 }
 
-void openFromPanel() {
+void generateFromPanel() {
     const std::string proj = trimCopy(g_projectBuf);
     if (proj.empty()) return;
-    openLevel(proj, trimCopy(g_irBuf));
+    openLevel(proj);
 }
 
 void doRefill() {
@@ -361,46 +356,34 @@ void focusBBox(const glm::vec3& mn, const glm::vec3& mx) {
 
 // --- panels ------------------------------------------------------------------
 
-// Shared body of the open panel: path fields with Browse dialogs, the session
-// recent list, the Open button (disabled while the project field is empty)
-// and the last load error. Enter in either field opens too.
-void drawOpenControls() {
-    bool open = false;
+// Shared body of the generate panel: the path field with a Browse dialog, the
+// session recent list, the Generate button (disabled while the project field
+// is empty) and the last load error. Enter in the field generates too.
+void drawGenerateControls() {
+    bool generate = false;
     ImGui::SetNextItemWidth(-78.0f);
-    open |= ImGui::InputTextWithHint("##project", "project.json", g_projectBuf, sizeof(g_projectBuf),
-                                     ImGuiInputTextFlags_EnterReturnsTrue);
+    generate |= ImGui::InputTextWithHint("##project", "project.json", g_projectBuf,
+                                         sizeof(g_projectBuf), ImGuiInputTextFlags_EnterReturnsTrue);
     ImGui::SameLine();
-    if (ImGui::Button("Browse...##p")) {
-        g_irDlg.open = false;  // one modal at a time
-        fileDialogOpen(g_projectDlg, g_projectBuf, g_projectsDir);
-    }
-    ImGui::SetNextItemWidth(-78.0f);
-    open |= ImGui::InputTextWithHint("##ir", "frozen IR json (optional; empty = generate layout)",
-                                     g_irBuf, sizeof(g_irBuf), ImGuiInputTextFlags_EnterReturnsTrue);
-    ImGui::SameLine();
-    if (ImGui::Button("Browse...##i")) {
-        g_projectDlg.open = false;
-        fileDialogOpen(g_irDlg, g_irBuf);
-    }
+    if (ImGui::Button("Browse...##p")) fileDialogOpen(g_projectDlg, g_projectBuf, g_projectsDir);
     if (!g_recent.empty()) {
         if (ImGui::BeginCombo("##recent", "recent projects")) {
-            for (const auto& [proj, ir] : g_recent) {
-                const std::string label = ir.empty() ? proj : proj + "  +ir";
-                if (ImGui::Selectable(label.c_str())) {
+            for (const std::string& proj : g_recent) {
+                if (ImGui::Selectable(proj.c_str()))
                     std::snprintf(g_projectBuf, sizeof(g_projectBuf), "%s", proj.c_str());
-                    std::snprintf(g_irBuf, sizeof(g_irBuf), "%s", ir.c_str());
-                }
             }
             ImGui::EndCombo();
         }
     }
     const bool hasProject = !trimCopy(g_projectBuf).empty();
     if (!hasProject) ImGui::BeginDisabled();
-    open |= ImGui::Button("Open");
+    generate |= ImGui::Button("Generate");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Load the project, generate the layout (same seed, attempts=4), fill");
     if (!hasProject) ImGui::EndDisabled();
     ImGui::SameLine();
-    ImGui::TextDisabled("or drop .json files onto the window");
-    if (open) openFromPanel();
+    ImGui::TextDisabled("or drop a project .json onto the window");
+    if (generate) generateFromPanel();
     if (!g_loadError.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.4f, 0.35f, 1.0f));
         ImGui::TextWrapped("%s", g_loadError.c_str());
@@ -415,42 +398,33 @@ void drawSidePanel(int h) {
 
     if (!g_level.loaded) {
         ImGui::TextDisabled("no level loaded");
-        drawOpenControls();
+        drawGenerateControls();
     } else {
         const std::string header =
             "Project: " + std::filesystem::path(g_level.projectPath).filename().string();
         ImGui::SetNextItemOpen(true, ImGuiCond_Once);
         if (ImGui::CollapsingHeader(header.c_str())) {
             ImGui::TextWrapped("project: %s", g_level.projectPath.c_str());
-            if (!g_level.irPath.empty()) ImGui::TextWrapped("ir: %s", g_level.irPath.c_str());
             const delve::FillStats& s = g_level.fill.stats;
             ImGui::Text("rooms %zu  walls %zu  nodes %zu", s.rooms, s.bodies, s.nodes);
             ImGui::Text("facings %zu  doors %zu  lamps %zu", s.facings, s.doors, s.lamps);
             ImGui::Text("fill %.0f ms (%zu units: %zu reused, %zu reran)", g_level.fillMs,
                         g_level.fill.units.size(), s.reused.size(), s.reran.size());
-            if (g_level.irPath.empty()) ImGui::Text("layout %.0f ms", g_level.layoutMs);
+            ImGui::Text("layout %.0f ms", g_level.layoutMs);
             ImGui::TextDisabled("unit cache: %zu outputs", g_level.unitCache.size());
 
             if (ImGui::Button("Refill (reload project)")) doRefill();
             ImGui::SameLine();
-            if (g_level.irPath.empty()) {
-                if (ImGui::Button("Re-layout")) doRelayout();
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Generate a fresh layout (same seed, attempts=4), rebuild the IR, refill");
-            } else {
-                ImGui::BeginDisabled();
-                ImGui::Button("Re-layout");
-                ImGui::EndDisabled();
-                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                    ImGui::SetTooltip("The level comes from --ir; re-layout needs a layout-tier project");
-            }
+            if (ImGui::Button("Re-layout")) doRelayout();
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Generate a fresh layout (same seed, attempts=4), rebuild the IR, refill");
             ImGui::SameLine();
             if (ImGui::Button("Close")) closeLevel();
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Close the level (back to the empty state)");
 
             ImGui::Separator();
-            ImGui::TextDisabled("open another:");
-            drawOpenControls();
+            ImGui::TextDisabled("another project:");
+            drawGenerateControls();
         }
 
         if (ImGui::CollapsingHeader("Selection", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -509,40 +483,41 @@ void drawSidePanel(int h) {
         ImGui::EndChild();
     }
 
-    // Modal file dialogs of the Browse buttons (drawn every frame while open;
-    // the chosen path only fills the field — Open stays a separate action).
+    // Modal file dialog of the Browse button (drawn every frame while open;
+    // the chosen path only fills the field — Generate stays a separate action).
     std::string picked;
     if (fileDialogDraw(g_projectDlg, "Open project", picked))
         std::snprintf(g_projectBuf, sizeof(g_projectBuf), "%s", picked.c_str());
-    if (fileDialogDraw(g_irDlg, "Open frozen IR", picked))
-        std::snprintf(g_irBuf, sizeof(g_irBuf), "%s", picked.c_str());
     ImGui::End();
 }
 
-// Right region: two equal panes side by side — 3D orbit view and the top view
-// with the IR overlay (and picking).
+// Right region: one window holding the two views as tabs (3D is the default)
+// instead of splitting the area; only the active tab's pane is drawn.
 void drawPanes(int w, int h) {
-    const float paneW = (static_cast<float>(w) - kPanelWidth) * 0.5f;
-
     ImGui::SetNextWindowPos(ImVec2(kPanelWidth, 0.0f), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(paneW, static_cast<float>(h)), ImGuiCond_Always);
-    ImGui::Begin("3D", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize);
-    drawPreviewPane(g_preview3d, g_rect3d, "no level loaded — open a project from the panel");
-    ImGui::End();
-
-    ImGui::SetNextWindowPos(ImVec2(kPanelWidth + paneW, 0.0f), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(static_cast<float>(w) - kPanelWidth - paneW,
-                                    static_cast<float>(h)),
+    ImGui::SetNextWindowSize(ImVec2(static_cast<float>(w) - kPanelWidth, static_cast<float>(h)),
                              ImGuiCond_Always);
-    ImGui::Begin("Top", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize);
-    const PreviewPaneResult topRes =
-        drawPreviewPane(g_previewTop, g_rectTop, "no level loaded — open a project from the panel",
-                        &g_layers);
-    if (g_level.loaded) {
-        if (topRes.clicked)
-            g_selection = pickAtSelection(g_level, g_previewTop, g_rectTop, topRes.clickPos);
-        drawIrOverlay(ImGui::GetWindowDrawList(), g_previewTop, g_rectTop, g_level, g_layers,
-                      g_selection);
+    ImGui::Begin("View", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize);
+    if (ImGui::BeginTabBar("##views")) {
+        if (ImGui::BeginTabItem("3D")) {
+            g_activeView = 0;
+            drawPreviewPane(g_preview3d, g_rect3d, "no level loaded — generate a project from the panel");
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Top")) {
+            g_activeView = 1;
+            const PreviewPaneResult topRes =
+                drawPreviewPane(g_previewTop, g_rectTop,
+                                "no level loaded — generate a project from the panel", &g_layers);
+            if (g_level.loaded) {
+                if (topRes.clicked)
+                    g_selection = pickAtSelection(g_level, g_previewTop, g_rectTop, topRes.clickPos);
+                drawIrOverlay(ImGui::GetWindowDrawList(), g_previewTop, g_rectTop, g_level, g_layers,
+                              g_selection);
+            }
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
     }
     ImGui::End();
 }
@@ -572,7 +547,7 @@ void init() {
 
     g_projectsDir = resolve_delve_projects(g_argv0);
 
-    if (!g_projectArg.empty()) openLevel(g_projectArg, g_irArg);
+    if (!g_projectArg.empty()) openLevel(g_projectArg);
 }
 
 void frame() {
@@ -593,10 +568,13 @@ void frame() {
         drawSidePanel(h);
         drawPanes(w, h);
 
-        // Offscreen preview passes: outside (before) the swapchain pass that
-        // draws the ImGui images referencing their targets.
-        g_preview3d.render();
-        g_previewTop.render();
+        // Offscreen pass of the active view only: outside (before) the
+        // swapchain pass that draws the ImGui image referencing its target.
+        if (g_activeView == 0) {
+            g_preview3d.render();
+        } else {
+            g_previewTop.render();
+        }
     }
 
     sg_pass_action action = {};
@@ -632,40 +610,18 @@ bool sniffIsIr(const std::string& path) {
     return head.find("\"delve-ir/") != std::string::npos;
 }
 
-// Drag & drop (enable_dragndrop, max 2): a project opens directly (replacing
-// the current level); an IR alone retargets the loaded project; both together
-// open as project + --ir.
+// Drag & drop (enable_dragndrop, max 1): a project .json opens directly,
+// replacing the current level. A frozen IR is not a viewer input (the layout
+// is always generated from the project) — say so instead of failing later.
 void handleDrop() {
-    const int n = std::min(sapp_get_num_dropped_files(), 2);
-    std::string proj, ir;
-    for (int i = 0; i < n; ++i) {
-        const std::string path = sapp_get_dropped_file_path(i);
-        if (sniffIsIr(path)) {
-            if (!ir.empty()) {
-                g_loadError = "drop at most one IR file";
-                logLine(g_loadError, true);
-                return;
-            }
-            ir = path;
-        } else {
-            if (!proj.empty()) {
-                g_loadError = "drop at most one project file";
-                logLine(g_loadError, true);
-                return;
-            }
-            proj = path;
-        }
-    }
-    if (proj.empty()) {
-        if (!ir.empty() && g_level.loaded) {
-            openLevel(g_level.projectPath, ir);
-        } else if (!ir.empty()) {
-            g_loadError = "IR without a project: drop a project first";
-            logLine(g_loadError, true);
-        }
+    if (sapp_get_num_dropped_files() < 1) return;
+    const std::string path = sapp_get_dropped_file_path(0);
+    if (sniffIsIr(path)) {
+        g_loadError = "frozen IR is not opened here — drop the project .json";
+        logLine(g_loadError, true);
         return;
     }
-    openLevel(proj, ir);  // empty ir = generate the layout
+    openLevel(path);
 }
 
 void event(const sapp_event* ev) {
@@ -675,21 +631,21 @@ void event(const sapp_event* ev) {
 
 void printUsage() {
     std::fprintf(stderr,
-                 "usage: DelveViewer [project.json [--ir frozen.json]] [--smoke]\n"
-                 "  no arguments: open the window empty; use the Open panel or drag & drop .json\n"
-                 "  --ir <file>  read a frozen IR (delve-ir/0|2|3) instead of generating the layout\n"
-                 "  --smoke      no window: load the level, print one stats line, exit 0\n"
+                 "usage: DelveViewer [project.json] [--smoke]\n"
+                 "  no arguments: open the window empty; use the Generate panel or drag & drop\n"
+                 "  the project .json onto the window (the layout is always generated)\n"
+                 "  --smoke      no window: generate the level, print one stats line, exit 0\n"
                  "               (needs a project; usage errors exit 2)\n"
                  "exit codes: 0 ok, 1 data error, 2 usage error\n");
 }
 
-// --smoke: the whole data path (layout or --ir -> IR -> fill with a unit
-// cache) without sokol. stdout carries exactly one stats line.
+// --smoke: the whole data path (layout -> IR -> fill with a unit cache)
+// without sokol. stdout carries exactly one stats line.
 int runSmoke() {
     spdlog::set_level(spdlog::level::err);
     Level level;
     std::string err;
-    if (!level.load(g_projectArg, g_irArg, resolve_delve_assets(g_argv0, g_projectArg), err)) {
+    if (!level.load(g_projectArg, resolve_delve_assets(g_argv0, g_projectArg), err)) {
         std::fprintf(stderr, "DelveViewer --smoke: %s\n", err.c_str());
         return 1;
     }
@@ -712,11 +668,7 @@ int main(int argc, char* argv[]) {
     bool smoke = false;
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
-        if (arg == "--ir" && i + 1 < argc) {
-            g_irArg = argv[++i];
-        } else if (arg.rfind("--ir=", 0) == 0) {
-            g_irArg = arg.substr(5);
-        } else if (arg == "--smoke") {
+        if (arg == "--smoke") {
             smoke = true;
         } else if (arg.rfind("--", 0) != 0) {
             g_projectArg = arg;
@@ -746,7 +698,7 @@ int main(int argc, char* argv[]) {
     desc.window_title = "DelveViewer";
     desc.high_dpi = true;
     desc.enable_dragndrop = true;
-    desc.max_dropped_files = 2;  // a project and its frozen IR in one drop
+    desc.max_dropped_files = 1;  // one project .json per drop
 #if defined(_WIN32)
     desc.win32.console_utf8 = true;
     desc.win32.console_attach = true;

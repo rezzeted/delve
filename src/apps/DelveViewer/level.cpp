@@ -4,10 +4,6 @@
 
 #include <chrono>
 #include <filesystem>
-#include <fstream>
-#include <sstream>
-
-#include <nlohmann/json.hpp>
 
 #if defined(__APPLE__)
     #include <mach-o/dyld.h>
@@ -25,15 +21,6 @@ constexpr int kLayoutAttempts = 4;
 double nowMs() {
     return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch())
         .count();
-}
-
-bool readTextFile(const std::string& path, std::string& text) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in) return false;
-    std::ostringstream ss;
-    ss << in.rdbuf();
-    text = ss.str();
-    return true;
 }
 
 // Best-effort path of the running executable (for the assets walk-up).
@@ -96,28 +83,9 @@ std::string resolve_delve_projects(const std::string& argv0) {
     return fs::is_directory(projects, ec) ? projects.string() : std::string{};
 }
 
-bool Level::readFrozenIr(const std::string& path, std::string& err) {
-    std::string text;
-    if (!readTextFile(path, text)) {
-        err = "cannot open " + path;
-        return false;
-    }
-    // delve-ir/0 (D0 frozen) builds through the project; delve-ir/2|3 (F5
-    // artifact) reads directly. The format key decides (N7: reject the rest).
-    const nlohmann::json doc = nlohmann::json::parse(text, nullptr, false);
-    const std::string format = doc.is_object() ? doc.value("format", std::string{}) : std::string{};
-    if (format == "delve-ir/0")
-        return delve::build_ir_v2(text, path, project, projectPath, ir, err);
-    if (format == delve::kIrFormat || format == delve::kIrFormatV2)
-        return delve::read_ir_v2_json(text, ir, err);
-    err = path + ": unsupported IR format \"" + format + "\" (expected delve-ir/0, " +
-          delve::kIrFormatV2 + " or " + delve::kIrFormat + ")";
-    return false;
-}
-
 bool Level::buildIrFromGenerate(std::string& err) {
     if (!project.layout) {
-        err = projectPath + ": delve-project/0 has no layout tier; pass --ir <frozen.json>";
+        err = projectPath + ": delve-project/0 has no layout tier to generate from";
         return false;
     }
     delve::layout::Catalog catalog;
@@ -147,8 +115,7 @@ bool Level::runFill(std::string& err) {
     return true;
 }
 
-bool Level::load(const std::string& proj, const std::string& irFile, const std::string& assets,
-                 std::string& err) {
+bool Level::load(const std::string& proj, const std::string& assets, std::string& err) {
     if (assets.empty()) {
         err = "cannot locate the delve assets dir (no assets/codes.pgg from the cwd, the "
               "executable or the project dir upwards)";
@@ -157,11 +124,10 @@ bool Level::load(const std::string& proj, const std::string& irFile, const std::
     Level next;
     next.unitCache = std::move(unitCache);  // F8: the cache outlives reloads
     next.projectPath = proj;
-    next.irPath = irFile;
     next.delveAssets = assets;
-    const bool ok = delve::load_project(proj, next.project, err) &&
-                    (irFile.empty() ? next.buildIrFromGenerate(err) : next.readFrozenIr(irFile, err)) &&
-                    next.runFill(err);
+    const bool ok =
+        delve::load_project(proj, next.project, err) && next.buildIrFromGenerate(err) &&
+        next.runFill(err);
     if (!ok) {
         unitCache = std::move(next.unitCache);  // keep the cache on failure too
         return false;
@@ -177,21 +143,14 @@ bool Level::refill(std::string& err) {
         return false;
     }
     if (!delve::load_project(projectPath, project, err)) return false;
-    // Same layout, fresh resolution: rebuild the IR from the stored layout
-    // (or re-read the frozen file), then refill through the shared cache.
-    const bool irOk = irPath.empty()
-                          ? delve::build_ir_from_layout(layoutData, project, projectPath, ir, err)
-                          : readFrozenIr(irPath, err);
-    return irOk && runFill(err);
+    // Same layout, fresh resolution: rebuild the IR from the stored layout,
+    // then refill through the shared cache.
+    return delve::build_ir_from_layout(layoutData, project, projectPath, ir, err) && runFill(err);
 }
 
 bool Level::relayout(std::string& err) {
     if (!loaded) {
         err = "no level loaded";
-        return false;
-    }
-    if (!irPath.empty()) {
-        err = "the level comes from --ir; re-layout needs a layout-tier project";
         return false;
     }
     if (!delve::load_project(projectPath, project, err)) return false;
