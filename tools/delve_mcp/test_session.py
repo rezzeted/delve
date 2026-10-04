@@ -39,8 +39,19 @@ class RepoRootTests(unittest.TestCase):
         raw = "~/sources/delve"
         expected = str((home / "sources" / "delve").resolve())
         self.assertEqual(default_repo_root({"DELVE_REPO_ROOT": raw}), expected)
-        with mock.patch.dict(os.environ, {"DELVE_REPO_ROOT": raw}, clear=False):
-            self.assertEqual(str(_repo_root()), expected)
+        # _repo_root() returns the env path only when it exists; give it a fake
+        # home so the test does not depend on the host's ~/sources/delve.
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_home = Path(tmp)
+            (fake_home / "sources" / "delve").mkdir(parents=True)
+            expected_fake = str((fake_home / "sources" / "delve").resolve())
+            env = {
+                "DELVE_REPO_ROOT": raw,
+                "HOME": str(fake_home),
+                "USERPROFILE": str(fake_home),
+            }
+            with mock.patch.dict(os.environ, env, clear=False):
+                self.assertEqual(str(_repo_root()), expected_fake)
 
     def test_absolute_repo_root_unchanged(self) -> None:
         root = str(Path("/tmp/delve-root").resolve())

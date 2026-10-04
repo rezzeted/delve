@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "delve": {
+      "command": "python3",
+      "args": ["-m", "tools.delve_mcp.launch"],
+      "env": {
+        "PYTHONIOENCODING": "utf-8",
+        "PYTHONUTF8": "1",
+        "PYTHONUNBUFFERED": "1"
+      },
+      "startupTimeoutMs": 120000
+    }
+  }
+}
