@@ -801,3 +801,105 @@ TEST(DelveCheck, CheckUnitsFiltersSpans) {
         EXPECT_TRUE(hasDiag(ds, "elements", "matches no unit")) << diagText(ds);
     }
 }
+
+// B3: elements verdicts are cached per F8 unit key — replay is governed by
+// the key (and the rule-set version), not by the geometry currently in fill.
+TEST(DelveCheck, ElementsCachedVerdicts) {
+    const std::vector<glm::vec3> pos = {
+        {0, 0, 0}, {1, 0, 0}, {1, 0, 1}, {0, 0, 1},  // quad A (clean)
+        {2, 0, 0}, {3, 0, 0}, {3, 0, 1}, {2, 0, 1},  // quad B1
+        {2, 0, 0}, {3, 0, 0}, {3, 0, 1}, {2, 0, 1},  // quad B2 = B1 (dirty)
+    };
+    const std::vector<int32_t> corners = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+    const std::vector<int32_t> offs = {0, 4, 8, 12};
+    auto makeFill = [&](std::vector<delve::FillResult::UnitSpan> spans) {
+        delve::FillResult fill;
+        fill.mesh = pgg::makeMesh(pos, corners, offs);
+        auto styled = std::make_shared<pgg::Geo>(*fill.mesh);
+        auto attrs = std::make_shared<pgg::AttrSet>();
+        attrs->columns["style"] =
+            pgg::AttrColumn{std::make_shared<const std::vector<int64_t>>(12, 1)};
+        styled->pointAttrs = std::move(attrs);
+        fill.mesh = std::move(styled);
+        fill.units = std::move(spans);
+        return fill;
+    };
+    auto mkSpan = [](const std::string& id, size_t begin, size_t end, uint64_t key) {
+        delve::FillResult::UnitSpan s;
+        s.id = id;
+        s.slot = "facing";
+        s.meshBegin = begin;
+        s.meshEnd = end;
+        s.cacheKey = key;
+        return s;
+    };
+    // A clean variant: the duplicate quad removed (B occupies [4,8)).
+    auto makeCleanFill = [&](std::vector<delve::FillResult::UnitSpan> spans) {
+        delve::FillResult fill;
+        fill.mesh = pgg::makeMesh({pos.begin(), pos.begin() + 8}, {0, 1, 2, 3, 4, 5, 6, 7},
+                                  {0, 4, 8});
+        auto styled = std::make_shared<pgg::Geo>(*fill.mesh);
+        auto attrs = std::make_shared<pgg::AttrSet>();
+        attrs->columns["style"] =
+            pgg::AttrColumn{std::make_shared<const std::vector<int64_t>>(8, 1)};
+        styled->pointAttrs = std::move(attrs);
+        fill.mesh = std::move(styled);
+        fill.units = std::move(spans);
+        return fill;
+    };
+
+    delve::UnitCache cache;
+    cache.store(delve::UnitKey{101}, pgg::makePoints({}), pgg::makePoints({}));
+    cache.store(delve::UnitKey{102}, pgg::makePoints({}), pgg::makePoints({}));
+
+    // First run computes live: the dirty span is caught and both verdicts land
+    // in the cache.
+    {
+        delve::FillResult fill =
+            makeFill({mkSpan("unit:a", 0, 4, 101), mkSpan("unit:b", 4, 12, 102)});
+        std::vector<delve::CheckDiag> ds;
+        EXPECT_FALSE(delve::check_elements_cached(fill, &cache, ds));
+        EXPECT_TRUE(hasDiag(ds, "elements", "unit:b: coincident faces")) << diagText(ds);
+        EXPECT_FALSE(hasDiag(ds, "elements", "unit:a")) << diagText(ds);
+    }
+    // Replay is key-governed: the same keys over a CLEAN mesh still report the
+    // cached dirty verdict (the caller guarantees key <=> output identity).
+    {
+        delve::FillResult fill =
+            makeCleanFill({mkSpan("unit:a", 0, 4, 101), mkSpan("unit:b", 4, 8, 102)});
+        std::vector<delve::CheckDiag> ds;
+        EXPECT_FALSE(delve::check_elements_cached(fill, &cache, ds)) << diagText(ds);
+        EXPECT_TRUE(hasDiag(ds, "elements", "unit:b: coincident faces")) << diagText(ds);
+    }
+    // Replay re-prefixes the current span id (same key under another id).
+    {
+        delve::FillResult fill = makeCleanFill({mkSpan("unit:c", 4, 8, 102)});
+        std::vector<delve::CheckDiag> ds;
+        EXPECT_FALSE(delve::check_elements_cached(fill, &cache, ds));
+        EXPECT_TRUE(hasDiag(ds, "elements", "unit:c: coincident faces")) << diagText(ds);
+        EXPECT_FALSE(hasDiag(ds, "elements", "unit:b")) << diagText(ds);
+    }
+    // A stale rule-set version is a miss: the verdict is recomputed live
+    // (clean mesh now -> ok).
+    {
+        delve::UnitCache stale;
+        stale.store(delve::UnitKey{101}, pgg::makePoints({}), pgg::makePoints({}));
+        stale.storeCheck(delve::UnitKey{101},
+                         delve::UnitCache::CheckVerdict{delve::kElementsCheckVersion + 1,
+                                                        false, {"stale finding"}});
+        delve::FillResult fill = makeCleanFill({mkSpan("unit:a", 0, 4, 101)});
+        std::vector<delve::CheckDiag> ds;
+        EXPECT_TRUE(delve::check_elements_cached(fill, &stale, ds)) << diagText(ds);
+        EXPECT_FALSE(hasDiag(ds, "elements", "stale finding")) << diagText(ds);
+    }
+    // Key-less spans and a null cache behave exactly like check_elements.
+    {
+        delve::FillResult fill = makeFill({mkSpan("unit:a", 0, 4, 0), mkSpan("unit:b", 4, 12, 0)});
+        std::vector<delve::CheckDiag> noCache, keyless, plain;
+        EXPECT_FALSE(delve::check_elements_cached(fill, nullptr, noCache));
+        EXPECT_FALSE(delve::check_elements_cached(fill, &cache, keyless));
+        EXPECT_FALSE(delve::check_elements(fill, plain));
+        EXPECT_EQ(noCache.size(), plain.size());
+        EXPECT_EQ(keyless.size(), plain.size());
+    }
+}

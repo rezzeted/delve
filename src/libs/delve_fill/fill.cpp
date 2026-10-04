@@ -1014,9 +1014,11 @@ bool fill_level(const IrV2& ir, const Project& project, const FillOpts& opts, Fi
     size_t meshOff = 0, anchorsOff = 0;
     for (const auto& u : units) {
         pgg::GeoPtr mesh, anch;
+        uint64_t unitKeyH = 0;
         if (opts.cache) {
             UnitKey key;
             if (!unit_key(u.slot, assetKeys[u.slot], u.bindings, key, err)) return false;
+            unitKeyH = key.h;
             UnitCache::Entry e;
             if (opts.cache->lookup(key, e)) {
                 mesh = e.mesh;
@@ -1043,6 +1045,7 @@ bool fill_level(const IrV2& ir, const Project& project, const FillOpts& opts, Fi
         span.meshEnd = meshOff + mesh->pointCount();
         span.anchorsBegin = anchorsOff;
         span.anchorsEnd = anchorsOff + anch->pointCount();
+        span.cacheKey = unitKeyH;
         meshOff = span.meshEnd;
         anchorsOff = span.anchorsEnd;
         out.units.push_back(std::move(span));

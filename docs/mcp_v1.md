@@ -89,7 +89,7 @@ D400 (слот R-A3), D500 (прогон PGG); `message` — err библиот�
 | `layout` | `file?, seed?, attempts?` | `{seed_used, attempt_used, ms}`; `seed` применяется к локальной копии проекта. Заменяет layoutData, сбрасывает IR/fill, кэш сохраняется |
 | `ir` | `file?, out?` | `{format:"delve-ir/3", text}` или `{wrote}` при `out` |
 | `fill` | `file?, threads?` | `{rooms, bodies, facings, nodes, doors, lamps, reused, reran, ms}` (`reused`/`reran` — счётчики кэша F8) |
-| `check` | `file?, unit?` | `{errors, diagnostics:[{code:"D600",…}], has_errors}` (F11; fill обеспечивается автоматически). `unit` — подстрока id юнита: только per-unit проверка elements по совпавшим юнитам (быстрый предчек арт-итерации; глобальные проверки пропускаются; ноль совпадений — ошибка; в ответе `units` — число совпавших) |
+| `check` | `file?, unit?` | `{errors, diagnostics:[{code:"D600",…}], has_errors}` (F11; fill обеспечивается автоматически). Повторный check на тёплом слоте реплеит elements-вердикты reused-юнитов из F8-кэша (B3) — секунды. `unit` — подстрока id юнита: только per-unit проверка elements по совпавшим юнитам (быстрый предчек арт-итерации; глобальные проверки пропускаются; ноль совпадений — ошибка; в ответе `units` — число совпавших) |
 | `export` | `file?, out, name?, split_groups?` | `{written:[…]}`; `out` обязателен; `name` по умолчанию — stem проекта (голый `project.json` → имя его каталога) |
 | `units` | `file?` | `{units:[{id, slot, mesh:[begin,end], anchors:[begin,end]}]}` из последнего fill, иначе `no_fill` |
 | `provenance` | `file?, room, key?` | `{room, entries:{key: format_prov(chain)}}` по `ir.rooms[i].prov`; нет комнаты/ключа → `not_found` |

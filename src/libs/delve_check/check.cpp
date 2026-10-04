@@ -587,21 +587,27 @@ bool check_spans(const IrV2& ir, const Project& project, std::vector<CheckDiag>&
 
 namespace {
 
-void checkSpanElements(const FillResult& fill, const FillResult::UnitSpan& span,
-                       const std::vector<int64_t>* styles, std::vector<CheckDiag>& diags,
-                       size_t mark) {
-    const auto elems = groupFaces(fill.mesh, span.meshBegin, span.meshEnd, styles);
+// Per-span elements logic shared by check_elements / check_units /
+// check_elements_cached. Messages are bare suffixes (no unit id): callers
+// prefix "F11/elements: <span.id>: " via push().
+void checkSpanElements(const pgg::GeoPtr& mesh, size_t begin, size_t end,
+                       const std::vector<int64_t>* styles,
+                       std::vector<std::string>& msgs) {
+    const auto elems = groupFaces(mesh, begin, end, styles);
     for (const auto& e : elems)
         if (e.styles.size() != 1)
-            push(diags, mark, "elements",
-                 span.id + ": element with " + std::to_string(e.styles.size()) +
-                     " styles (mixed paint)");
-    const std::vector<FaceInfo> faces = spanFaces(fill.mesh, span.meshBegin, span.meshEnd);
+            msgs.push_back("element with " + std::to_string(e.styles.size()) +
+                           " styles (mixed paint)");
+    const std::vector<FaceInfo> faces = spanFaces(mesh, begin, end);
     for (size_t i = 0; i < faces.size(); ++i)
         for (size_t j = i + 1; j < faces.size(); ++j)
-            if (doubleArea(faces[i], faces[j], *fill.mesh->positions) > 1e-6)
-                push(diags, mark, "elements",
-                     span.id + ": coincident faces (double geometry) at " + pt3(faces[i].c));
+            if (doubleArea(faces[i], faces[j], *mesh->positions) > 1e-6)
+                msgs.push_back("coincident faces (double geometry) at " + pt3(faces[i].c));
+}
+
+void pushSpanMsgs(std::vector<CheckDiag>& diags, size_t mark, const std::string& unitId,
+                  const std::vector<std::string>& msgs) {
+    for (const std::string& m : msgs) push(diags, mark, "elements", unitId + ": " + m);
 }
 
 }  // namespace
@@ -615,7 +621,37 @@ bool check_elements(const FillResult& fill, std::vector<CheckDiag>& diags) {
         return false;
     }
     for (const auto& span : fill.units) {
-        checkSpanElements(fill, span, styles, diags, mark);
+        std::vector<std::string> msgs;
+        checkSpanElements(fill.mesh, span.meshBegin, span.meshEnd, styles, msgs);
+        pushSpanMsgs(diags, mark, span.id, msgs);
+        if (diags.size() >= mark + kCap) return false;
+    }
+    return diags.size() == mark;
+}
+
+bool check_elements_cached(const FillResult& fill, UnitCache* cache,
+                           std::vector<CheckDiag>& diags) {
+    if (!cache) return check_elements(fill, diags);
+    const size_t mark = diags.size();
+    if (!fill.mesh || fill.mesh->pointCount() == 0) return true;
+    const auto* styles = styleCol(fill.mesh);
+    if (!styles) {
+        push(diags, mark, "elements", "mesh without @style (slots §1: v1 assets must set it)");
+        return false;
+    }
+    for (const auto& span : fill.units) {
+        UnitCache::CheckVerdict v;
+        const UnitKey key{span.cacheKey};
+        if (span.cacheKey != 0 && cache->lookupCheck(key, kElementsCheckVersion, v)) {
+            pushSpanMsgs(diags, mark, span.id, v.messages);
+        } else {
+            std::vector<std::string> msgs;
+            checkSpanElements(fill.mesh, span.meshBegin, span.meshEnd, styles, msgs);
+            if (span.cacheKey != 0)
+                cache->storeCheck(key, UnitCache::CheckVerdict{kElementsCheckVersion,
+                                                               msgs.empty(), msgs});
+            pushSpanMsgs(diags, mark, span.id, msgs);
+        }
         if (diags.size() >= mark + kCap) return false;
     }
     return diags.size() == mark;
@@ -640,7 +676,9 @@ bool check_units(const FillResult& fill, const std::string& unit_substr,
             }
             continue;
         }
-        checkSpanElements(fill, span, styles, diags, mark);
+        std::vector<std::string> msgs;
+        checkSpanElements(fill.mesh, span.meshBegin, span.meshEnd, styles, msgs);
+        pushSpanMsgs(diags, mark, span.id, msgs);
         if (diags.size() >= mark + kCap) break;
     }
     if (matched_out) *matched_out = matched;
@@ -725,6 +763,19 @@ bool check_level(const IrV2& ir, const Project& project, const FillResult& fill,
     ok = check_anchors(ir, project, fill, diags) && ok;
     ok = check_spans(ir, project, diags) && ok;
     ok = check_elements(fill, diags) && ok;
+    ok = check_facing_bounds(ir, project, fill, diags) && ok;
+    return ok;
+}
+
+bool check_level_cached(const IrV2& ir, const Project& project, const FillResult& fill,
+                        UnitCache* cache, std::vector<CheckDiag>& diags) {
+    bool ok = true;
+    ok = check_passage(ir, project, diags) && ok;
+    ok = check_opening_voids(ir, fill, diags) && ok;
+    ok = check_transitions(ir, project, fill, diags) && ok;
+    ok = check_anchors(ir, project, fill, diags) && ok;
+    ok = check_spans(ir, project, diags) && ok;
+    ok = check_elements_cached(fill, cache, diags) && ok;
     ok = check_facing_bounds(ir, project, fill, diags) && ok;
     return ok;
 }

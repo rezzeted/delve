@@ -7,6 +7,7 @@
 // assembly (fill.cpp), so a hit is position-independent by construction.
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -46,9 +47,19 @@ bool unit_key(const std::string& slot, uint64_t asset_key,
 // levels are a few hundred units; a disk layer with GC is a D4 concern.
 class UnitCache {
   public:
+    // B3: F11/elements verdict for this exact unit output, written by
+    // delve_check. version is delve_check's rule-set version — a mismatch is
+    // a miss (rules changed since the verdict was computed). messages are
+    // unit-id-relative suffixes (the caller re-prefixes the current span id).
+    struct CheckVerdict {
+        uint64_t version = 0;
+        bool ok = true;
+        std::vector<std::string> messages;
+    };
     struct Entry {
         pgg::GeoPtr mesh;
         pgg::GeoPtr anchors;
+        std::optional<CheckVerdict> check;
     };
     bool lookup(const UnitKey& k, Entry& out) const {
         const auto it = map_.find(k.h);
@@ -57,8 +68,22 @@ class UnitCache {
         return true;
     }
     void store(const UnitKey& k, pgg::GeoPtr mesh, pgg::GeoPtr anchors) {
-        map_[k.h] = Entry{std::move(mesh), std::move(anchors)};
+        auto& e = map_[k.h];
+        e.mesh = std::move(mesh);
+        e.anchors = std::move(anchors);
+        e.check.reset();  // new output: any old verdict is for stale geometry
     }
+    // B3 verdict access. lookupCheck: false on miss (no entry, no verdict, or
+    // a stale rule-set version). storeCheck tolerates a missing entry (the
+    // verdict alone is enough for replay).
+    bool lookupCheck(const UnitKey& k, uint64_t version, CheckVerdict& out) const {
+        const auto it = map_.find(k.h);
+        if (it == map_.end() || !it->second.check || it->second.check->version != version)
+            return false;
+        out = *it->second.check;
+        return true;
+    }
+    void storeCheck(const UnitKey& k, CheckVerdict v) { map_[k.h].check = std::move(v); }
     size_t size() const { return map_.size(); }
     void clear() { map_.clear(); }
 

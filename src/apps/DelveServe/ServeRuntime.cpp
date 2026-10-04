@@ -461,7 +461,9 @@ json ServeRuntime::handleCheck(uint64_t clientId, const json& args) {
     std::vector<delve::CheckDiag> checks;
     json data;
     if (unit.empty()) {
-        delve::check_level(slot.ir, slot.project, slot.fill, checks);
+        // B3: reused units replay their cached elements verdicts — a warm
+        // re-check is seconds, not a full rescan.
+        delve::check_level_cached(slot.ir, slot.project, slot.fill, &slot.cache, checks);
     } else {
         size_t matched = 0;
         delve::check_units(slot.fill, unit, checks, &matched);

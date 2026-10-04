@@ -266,6 +266,13 @@ bool runDelveServeSmokeTest(const std::string& argv0, const std::string& assetsD
                   chk["data"].value("has_errors", true) == false,
               "rpc check on smoke_project -> errors=0");
 
+        // 9b. B3: a second identical check replays cached elements verdicts —
+        // same answer, and now from the verdict cache.
+        const json chk2 = call({{"op", "check"}, {"args", {{"file", smokeFile}}}});
+        check(chk2.value("ok", false) && chk2["data"].value("errors", 1u) == 0u &&
+                  chk2["data"].value("has_errors", true) == false,
+              "rpc check again (cached elements verdicts) -> errors=0");
+
         // 10. export artifacts
         const json exp = call(
             {{"op", "export"}, {"args", {{"file", smokeFile}, {"out", (tmpDir / "export").string()}}}});

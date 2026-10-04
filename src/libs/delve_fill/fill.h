@@ -74,6 +74,9 @@ struct FillResult {
         std::string id, slot;
         size_t meshBegin = 0, meshEnd = 0;
         size_t anchorsBegin = 0, anchorsEnd = 0;
+        // F8 unit key (UnitKey::h) when fill ran with a UnitCache, else 0.
+        // delve_check uses it to cache per-unit elements verdicts (B3).
+        uint64_t cacheKey = 0;
     };
     std::vector<UnitSpan> units;
 };

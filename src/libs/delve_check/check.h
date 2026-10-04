@@ -39,10 +39,23 @@ bool check_anchors(const IrV2& ir, const Project& project, const FillResult& fil
 // pillar interiors (touching is fine).
 bool check_spans(const IrV2& ir, const Project& project, std::vector<CheckDiag>& diags);
 
+// Rule-set version of the elements check (B3). Bump when the per-unit logic
+// changes: cached verdicts with a different version are misses.
+inline constexpr uint64_t kElementsCheckVersion = 1;
+
 // Elements (connected face groups per unit): uniform @style; no coincident
 // same-normal faces (double geometry; touching solids have opposite normals,
 // embedded parts live on different planes, so both pass).
 bool check_elements(const FillResult& fill, std::vector<CheckDiag>& diags);
+
+// B3: check_elements over the F8 cache. Spans carry cacheKey only when fill
+// ran with a UnitCache; key-less spans (and cache == nullptr) are checked
+// live, exactly as check_elements. Cached verdicts are rigid-transform
+// invariant (elements logic is), unit-id-relative, and versioned by
+// kElementsCheckVersion; messages are re-prefixed with the current span id
+// on replay, so the diag stream matches an uncached run.
+bool check_elements_cached(const FillResult& fill, UnitCache* cache,
+                           std::vector<CheckDiag>& diags);
 
 // Unit-scoped elements check (F11-fast): same per-unit logic as
 // check_elements, restricted to units whose id contains unit_substr; global
@@ -60,5 +73,11 @@ bool check_facing_bounds(const IrV2& ir, const Project& project, const FillResul
 
 bool check_level(const IrV2& ir, const Project& project, const FillResult& fill,
                  std::vector<CheckDiag>& diags);
+
+// check_level with the elements check served through the F8 unit cache (B3):
+// reused units replay their cached verdicts, only reran units are re-checked.
+// Global checks (passage/spans/anchors/…) always run live — they are cheap.
+bool check_level_cached(const IrV2& ir, const Project& project, const FillResult& fill,
+                        UnitCache* cache, std::vector<CheckDiag>& diags);
 
 }  // namespace delve
