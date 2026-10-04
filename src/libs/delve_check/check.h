@@ -44,6 +44,14 @@ bool check_spans(const IrV2& ir, const Project& project, std::vector<CheckDiag>&
 // embedded parts live on different planes, so both pass).
 bool check_elements(const FillResult& fill, std::vector<CheckDiag>& diags);
 
+// Unit-scoped elements check (F11-fast): same per-unit logic as
+// check_elements, restricted to units whose id contains unit_substr; global
+// checks are the caller's choice (skipped in --unit mode). Zero matching
+// units is an error (probably a typo in the filter). matched_out, when set,
+// receives the number of matched units.
+bool check_units(const FillResult& fill, const std::string& unit_substr,
+                 std::vector<CheckDiag>& diags, size_t* matched_out = nullptr);
+
 // Facing dressing belongs to its room's side (5.2): every mesh point of a
 // facing unit lies inside (or within 1e-4 of) the room's contour. Catches
 // side inversions that zone/span checks cannot see (they are s/l-relative).

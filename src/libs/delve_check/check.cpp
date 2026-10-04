@@ -585,6 +585,27 @@ bool check_spans(const IrV2& ir, const Project& project, std::vector<CheckDiag>&
     return diags.size() == mark;
 }
 
+namespace {
+
+void checkSpanElements(const FillResult& fill, const FillResult::UnitSpan& span,
+                       const std::vector<int64_t>* styles, std::vector<CheckDiag>& diags,
+                       size_t mark) {
+    const auto elems = groupFaces(fill.mesh, span.meshBegin, span.meshEnd, styles);
+    for (const auto& e : elems)
+        if (e.styles.size() != 1)
+            push(diags, mark, "elements",
+                 span.id + ": element with " + std::to_string(e.styles.size()) +
+                     " styles (mixed paint)");
+    const std::vector<FaceInfo> faces = spanFaces(fill.mesh, span.meshBegin, span.meshEnd);
+    for (size_t i = 0; i < faces.size(); ++i)
+        for (size_t j = i + 1; j < faces.size(); ++j)
+            if (doubleArea(faces[i], faces[j], *fill.mesh->positions) > 1e-6)
+                push(diags, mark, "elements",
+                     span.id + ": coincident faces (double geometry) at " + pt3(faces[i].c));
+}
+
+}  // namespace
+
 bool check_elements(const FillResult& fill, std::vector<CheckDiag>& diags) {
     const size_t mark = diags.size();
     if (!fill.mesh || fill.mesh->pointCount() == 0) return true;
@@ -594,21 +615,39 @@ bool check_elements(const FillResult& fill, std::vector<CheckDiag>& diags) {
         return false;
     }
     for (const auto& span : fill.units) {
-        const auto elems = groupFaces(fill.mesh, span.meshBegin, span.meshEnd, styles);
-        for (const auto& e : elems)
-            if (e.styles.size() != 1)
-                push(diags, mark, "elements",
-                     span.id + ": element with " + std::to_string(e.styles.size()) +
-                         " styles (mixed paint)");
-        const std::vector<FaceInfo> faces =
-            spanFaces(fill.mesh, span.meshBegin, span.meshEnd);
-        for (size_t i = 0; i < faces.size(); ++i)
-            for (size_t j = i + 1; j < faces.size(); ++j)
-                if (doubleArea(faces[i], faces[j], *fill.mesh->positions) > 1e-6)
-                    push(diags, mark, "elements",
-                         span.id + ": coincident faces (double geometry) at " +
-                             pt3(faces[i].c));
+        checkSpanElements(fill, span, styles, diags, mark);
         if (diags.size() >= mark + kCap) return false;
+    }
+    return diags.size() == mark;
+}
+
+bool check_units(const FillResult& fill, const std::string& unit_substr,
+                 std::vector<CheckDiag>& diags, size_t* matched_out) {
+    const size_t mark = diags.size();
+    size_t matched = 0;
+    const bool hasMesh = fill.mesh && fill.mesh->pointCount() > 0;
+    const auto* styles = hasMesh ? styleCol(fill.mesh) : nullptr;
+    bool styleReported = false;
+    for (const auto& span : fill.units) {
+        if (span.id.find(unit_substr) == std::string::npos) continue;
+        ++matched;
+        if (!hasMesh) continue;
+        if (!styles) {
+            if (!styleReported) {
+                styleReported = true;
+                push(diags, mark, "elements",
+                     "mesh without @style (slots §1: v1 assets must set it)");
+            }
+            continue;
+        }
+        checkSpanElements(fill, span, styles, diags, mark);
+        if (diags.size() >= mark + kCap) break;
+    }
+    if (matched_out) *matched_out = matched;
+    if (matched == 0) {
+        push(diags, mark, "elements",
+             "unit filter \"" + unit_substr + "\" matches no unit (see the units listing)");
+        return false;
     }
     return diags.size() == mark;
 }

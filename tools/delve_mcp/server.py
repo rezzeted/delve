@@ -199,14 +199,18 @@ def delve_fill(file: Optional[str] = None, threads: Optional[int] = None) -> dic
 
 
 @mcp.tool()
-def delve_check(file: Optional[str] = None) -> dict:
+def delve_check(file: Optional[str] = None, unit: Optional[str] = None) -> dict:
     """Fill + проверки F11 (геометрия, проходимость, лампы).
 
-    file — слот. Ответ data: {errors, diagnostics:[{code:"D600",message,...}],
-    has_errors, session:{file}}. has_errors=false — уровень проходит проверки.
-    Пример: delve_check() после delve_fill.
+    file — слот. unit — подстрока id юнита: проверяется только геометрия
+    юнитов с такой подстрокой (быстрый предчек арт-итерации, глобальные
+    проверки пропускаются; ноль совпадений — ошибка). Ответ data: {errors,
+    diagnostics:[{code:"D600",message,...}], has_errors, units? (число
+    совпавших юнитов в режиме unit), session:{file}}. has_errors=false —
+    уровень проходит проверки.
+    Пример: delve_check() после delve_fill; delve_check(unit="drain").
     """
-    return _call("check", _with_file({}, file))
+    return _call("check", _with_file({"unit": unit}, file))
 
 
 @mcp.tool()
@@ -253,15 +257,20 @@ def delve_provenance(room: str, file: Optional[str] = None,
 
 @mcp.tool()
 def delve_asset_check(slot: str, asset: str, file: Optional[str] = None) -> dict:
-    """Статическая проверка слот-ассета (.pgg) в контексте проекта (R-A3).
+    """Статическая проверка слот-ассета (.pgg) в контексте проекта (R-A3)
+    + contract lint (A2).
 
     Отладка ассета без полного fill: интерфейс слота (входы/выходы/группы)
-    сверяется с контрактом слота за миллисекунды. slot — вид слота
-    (room_fill/wall_body/facing/door/...); asset — путь до .pgg (относительный
-    резолвится сначала от assets/ delve, потом от asset_roots проекта).
-    file — слот. Ответ data: {asset? (резолвнутый путь),
-    diagnostics:[{code,message,...}] (delve/slot-коды), has_errors,
-    session:{file}}.
+    сверяется с контрактом слота за миллисекунды; при чистой статике ассет
+    дополнительно прогоняется один раз с минимальными синтетическими входами
+    и схема выхода проверяется строго (delve/lint: нет групп/vec2/vec4,
+    @style:int + @Cd:vec3 на точках меша кроме door, @kind:int на непустых
+    якорях; падение синтетического прогона — warning «inconclusive», не
+    ошибка). slot — вид слота (room_fill/wall_body/facing/door/...);
+    asset — путь до .pgg (относительный резолвится сначала от assets/ delve,
+    потом от asset_roots проекта). file — слот. Ответ data: {asset?
+    (резолвнутый путь), diagnostics:[{code,message,...}] (delve/slot и
+    delve/lint коды), has_errors, session:{file}}.
     Пример: delve_asset_check(slot="room_fill", asset="rooms/fill_v1.pgg").
     """
     return _call("asset_check", _with_file({"slot": slot, "asset": asset}, file))

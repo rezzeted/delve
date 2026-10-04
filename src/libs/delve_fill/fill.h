@@ -32,6 +32,19 @@ bool check_asset(const std::string& slot, const std::string& asset_path,
                  const std::vector<std::string>& import_roots,
                  std::vector<SlotDiag>& diags);
 
+// Contract lint on top of check_asset: runs the asset once with minimal
+// synthetic inputs from the slot contract (seg/contour/... fixtures built in
+// code) and checks the outputs against the assembly (merge) and F11 rules:
+// mesh/anchors geo kinds, no groups/detail/instances, no vec2/vec4 columns,
+// @style:int + @Cd:vec3 on mesh points (except door — neutral palette),
+// int @kind on non-empty anchors. Findings use the "delve/lint" code.
+// A failed synthetic run (inputs too poor for the asset) downgrades the lint
+// to a warning — inconclusive, not an error. Slower than check_asset (one
+// real PGG run); fill_level deliberately stays on the static check.
+bool lint_asset(const std::string& slot, const std::string& asset_path,
+                const std::vector<std::string>& import_roots,
+                std::vector<SlotDiag>& diags);
+
 // R-A5 last-resort root: the PGG product lib (thirdparty/pgg/resources/pgg)
 // the delve repo vendors as a submodule, located by walking up from the delve
 // assets dir. Empty when the layout is not the repo one. Callers append it

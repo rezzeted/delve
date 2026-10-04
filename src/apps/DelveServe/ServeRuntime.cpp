@@ -454,16 +454,25 @@ json ServeRuntime::handleFill(uint64_t clientId, const json& args) {
 
 json ServeRuntime::handleCheck(uint64_t clientId, const json& args) {
     const SlotRef ref = resolveSlot(clientId, args);
+    const std::string unit = argStr(args, "unit");
     ProjectSession& slot = *ref.slot;
     std::lock_guard<std::recursive_mutex> lock(slot.mu);
     ensureFillLocked(slot, 0);
     std::vector<delve::CheckDiag> checks;
-    delve::check_level(slot.ir, slot.project, slot.fill, checks);
+    json data;
+    if (unit.empty()) {
+        delve::check_level(slot.ir, slot.project, slot.fill, checks);
+    } else {
+        size_t matched = 0;
+        delve::check_units(slot.fill, unit, checks, &matched);
+        data["units"] = matched;
+    }
     std::vector<delve::Diag> diags;
     for (const delve::CheckDiag& c : checks) diags.push_back(delve::make_diag("D600", c.message));
-    return withSession(ref, {{"errors", checks.size()},
-                             {"diagnostics", delve::diags_to_json(diags)},
-                             {"has_errors", !checks.empty()}});
+    data["errors"] = checks.size();
+    data["diagnostics"] = delve::diags_to_json(diags);
+    data["has_errors"] = !checks.empty();
+    return withSession(ref, data);
 }
 
 json ServeRuntime::handleExport(uint64_t clientId, const json& args) {
@@ -574,6 +583,12 @@ json ServeRuntime::handleAssetCheck(uint64_t clientId, const json& args) {
     } else {
         std::vector<delve::SlotDiag> sds;
         delve::check_asset(slotKind, resolved, roots, sds);
+        bool staticErrors = false;
+        for (const delve::SlotDiag& d : sds) staticErrors = staticErrors || !d.warning;
+        // A2 contract lint: one synthetic run + strict output-schema checks.
+        // Only on a clean static pass (a broken interface would just make the
+        // run fail with an inconclusive warning).
+        if (!staticErrors) delve::lint_asset(slotKind, resolved, roots, sds);
         for (const delve::SlotDiag& d : sds) diags.push_back({d.code, d.message, {}, d.warning});
         data["asset"] = resolved;
     }

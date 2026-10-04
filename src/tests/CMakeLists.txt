@@ -38,7 +38,7 @@ set_property(TARGET delve_ir_test PROPERTY FOLDER tests)
 add_test(NAME delve_ir_test COMMAND delve_ir_test)
 
 add_executable(delve_assets_test delve_assets_test.cpp)
-target_link_libraries(delve_assets_test PRIVATE GTest::gtest_main delve pgg nlohmann_json::nlohmann_json)
+target_link_libraries(delve_assets_test PRIVATE GTest::gtest_main delve delve_fill pgg nlohmann_json::nlohmann_json)
 target_compile_definitions(delve_assets_test PRIVATE DELVE_ASSETS_DIR="${CMAKE_SOURCE_DIR}/assets")
 target_compile_features(delve_assets_test PRIVATE cxx_std_20)
 set_property(TARGET delve_assets_test PROPERTY FOLDER tests)

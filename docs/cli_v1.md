@@ -19,9 +19,16 @@ DelveCli <command> [args] [--json] [--assets <dir>]
                                                            F6: наполнение (только статистика)
   export   <project.json> [--ir f | --layout f] [-o dir] [--name n] [--split-groups]
                                                            F6+F7: артефакты уровня
-  check    <project.json> [--ir f | --layout f] [--threads N]
+  check    <project.json> [--ir f | --layout f] [--threads N] [--unit s]
                                                            F6+F11: геометрические проверки
 ```
+
+- `--unit s` у `check` — юнитовый предчек (F11-fast для арт-итерации): только
+  юниты, чей id содержит подстроку `s`, прогоняются через per-unit логику
+  elements (смешение `@style` внутри элемента, совпадающие грани); глобальные
+  проверки (проходимость, спаны, якоря, …) пропускаются. Ноль совпавших
+  юнитов — ошибка (опечатка в фильтре). В `--json` добавляется
+  `stats.units` — число совпавших юнитов.
 
 - Без `--ir`/`--layout` IR строится из layout-яруса проекта (delve-project/1).
   `--ir` сниффится по ключу `format`: `delve-ir/0` собирается через проект,

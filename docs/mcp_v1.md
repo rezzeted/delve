@@ -89,11 +89,11 @@ D400 (слот R-A3), D500 (прогон PGG); `message` — err библиот�
 | `layout` | `file?, seed?, attempts?` | `{seed_used, attempt_used, ms}`; `seed` применяется к локальной копии проекта. Заменяет layoutData, сбрасывает IR/fill, кэш сохраняется |
 | `ir` | `file?, out?` | `{format:"delve-ir/3", text}` или `{wrote}` при `out` |
 | `fill` | `file?, threads?` | `{rooms, bodies, facings, nodes, doors, lamps, reused, reran, ms}` (`reused`/`reran` — счётчики кэша F8) |
-| `check` | `file?` | `{errors, diagnostics:[{code:"D600",…}], has_errors}` (F11; fill обеспечивается автоматически) |
+| `check` | `file?, unit?` | `{errors, diagnostics:[{code:"D600",…}], has_errors}` (F11; fill обеспечивается автоматически). `unit` — подстрока id юнита: только per-unit проверка elements по совпавшим юнитам (быстрый предчек арт-итерации; глобальные проверки пропускаются; ноль совпадений — ошибка; в ответе `units` — число совпавших) |
 | `export` | `file?, out, name?, split_groups?` | `{written:[…]}`; `out` обязателен; `name` по умолчанию — stem проекта (голый `project.json` → имя его каталога) |
 | `units` | `file?` | `{units:[{id, slot, mesh:[begin,end], anchors:[begin,end]}]}` из последнего fill, иначе `no_fill` |
 | `provenance` | `file?, room, key?` | `{room, entries:{key: format_prov(chain)}}` по `ir.rooms[i].prov`; нет комнаты/ключа → `not_found` |
-| `asset_check` | `file?, slot, asset` | `{diagnostics, has_errors}` — `delve::check_asset`; import-roots = проектные `asset_roots` + библиотека ассетов delve; относительный `asset` ищется в библиотеке, затем в проектных roots |
+| `asset_check` | `file?, slot, asset` | `{diagnostics, has_errors}` — `delve::check_asset` + contract lint `delve::lint_asset` (при чистой статике: один прогон с синтетическими входами слота + строгая схема выхода; коды `delve/slot` и `delve/lint`; падение синтетического прогона — warning «inconclusive»); import-roots = проектные `asset_roots` + библиотека ассетов delve; относительный `asset` ищется в библиотеке, затем в проектных roots |
 
 ### Семантика fill (тёплая петля)
 
@@ -160,7 +160,7 @@ replay: заново `load` всех известных проектов (отв
 
 `delve_status` · `delve_load(path)` · `delve_validate(file?)` ·
 `delve_layout(file?, seed?, attempts?)` · `delve_ir(file?, out?)` ·
-`delve_fill(file?, threads?)` · `delve_check(file?)` ·
+`delve_fill(file?, threads?)` · `delve_check(file?, unit?)` ·
 `delve_export(out, file?, name?, split_groups?)` · `delve_units(file?)` ·
 `delve_provenance(room, file?, key?)` · `delve_asset_check(slot, asset, file?)`
 

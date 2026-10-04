@@ -729,3 +729,75 @@ TEST(DelveCheck, GateAssetHasNoDoubleGeometry) {
     std::vector<delve::CheckDiag> ds;
     EXPECT_TRUE(delve::check_elements(fill, ds)) << diagText(ds);
 }
+
+// A1: the unit-scoped precheck (check --unit / RPC unit) runs the per-unit
+// elements logic only on units whose id contains the filter substring; zero
+// matches is an error (probably a typo in the filter).
+TEST(DelveCheck, CheckUnitsFiltersSpans) {
+    // Three quads: "unit:a" is clean; "unit:b" carries two coincident
+    // same-normal quads (double geometry).
+    const std::vector<glm::vec3> pos = {
+        {0, 0, 0}, {1, 0, 0}, {1, 0, 1}, {0, 0, 1},  // quad A
+        {2, 0, 0}, {3, 0, 0}, {3, 0, 1}, {2, 0, 1},  // quad B1
+        {2, 0, 0}, {3, 0, 0}, {3, 0, 1}, {2, 0, 1},  // quad B2 = B1
+    };
+    const std::vector<int32_t> corners = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+    const std::vector<int32_t> offs = {0, 4, 8, 12};
+    delve::FillResult fill;
+    fill.mesh = pgg::makeMesh(pos, corners, offs);
+    auto styled = std::make_shared<pgg::Geo>(*fill.mesh);
+    auto attrs = std::make_shared<pgg::AttrSet>();
+    attrs->columns["style"] =
+        pgg::AttrColumn{std::make_shared<const std::vector<int64_t>>(12, 1)};
+    styled->pointAttrs = std::move(attrs);
+    fill.mesh = std::move(styled);
+    delve::FillResult::UnitSpan a;
+    a.id = "unit:a";
+    a.slot = "facing";
+    a.meshBegin = 0;
+    a.meshEnd = 4;
+    delve::FillResult::UnitSpan b;
+    b.id = "unit:b";
+    b.slot = "facing";
+    b.meshBegin = 4;
+    b.meshEnd = 12;
+    fill.units = {a, b};
+
+    // Full-level elements check sees the dirty unit.
+    {
+        std::vector<delve::CheckDiag> ds;
+        EXPECT_FALSE(delve::check_elements(fill, ds));
+        EXPECT_TRUE(hasDiag(ds, "elements", "coincident faces")) << diagText(ds);
+    }
+    // The clean unit alone passes and reports exactly one match.
+    {
+        std::vector<delve::CheckDiag> ds;
+        size_t matched = 0;
+        EXPECT_TRUE(delve::check_units(fill, "unit:a", ds, &matched)) << diagText(ds);
+        EXPECT_EQ(matched, 1u);
+        EXPECT_TRUE(ds.empty()) << diagText(ds);
+    }
+    // The dirty unit alone is caught.
+    {
+        std::vector<delve::CheckDiag> ds;
+        size_t matched = 0;
+        EXPECT_FALSE(delve::check_units(fill, "unit:b", ds, &matched));
+        EXPECT_EQ(matched, 1u);
+        EXPECT_TRUE(hasDiag(ds, "elements", "coincident faces")) << diagText(ds);
+    }
+    // A substring matching both runs both.
+    {
+        std::vector<delve::CheckDiag> ds;
+        size_t matched = 0;
+        EXPECT_FALSE(delve::check_units(fill, "unit:", ds, &matched));
+        EXPECT_EQ(matched, 2u);
+    }
+    // Zero matches: error with a hint, not a silent pass.
+    {
+        std::vector<delve::CheckDiag> ds;
+        size_t matched = 99;
+        EXPECT_FALSE(delve::check_units(fill, "no_such_unit", ds, &matched));
+        EXPECT_EQ(matched, 0u);
+        EXPECT_TRUE(hasDiag(ds, "elements", "matches no unit")) << diagText(ds);
+    }
+}

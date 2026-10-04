@@ -57,6 +57,7 @@ struct CliArgs {
     std::string outFile;     // -o
     std::string name;        // --name (export artifact base name)
     std::string assets;      // --assets
+    std::string unit;        // --unit (check: only units whose id has this substring)
     std::optional<int> seed;
     int attempts = kLayoutAttempts;
     unsigned threads = 0;
@@ -81,8 +82,9 @@ void printUsage(std::ostream& out) {
         "                                                          F6: fill the level (stats only)\n"
         "  export   <project.json> [--ir f | --layout f] [-o dir] [--name n]\n"
         "           [--split-groups]                               F6+F7: obj + anchors + units + ir\n"
-        "  check    <project.json> [--ir f | --layout f] [--threads N]\n"
+        "  check    <project.json> [--ir f | --layout f] [--threads N] [--unit s]\n"
         "                                                          F6+F11: geometric checks\n"
+        "                                                          --unit s: only units with 's' in the id\n"
         "\n"
         "Without --ir/--layout the IR is built from the project's layout tier\n"
         "(delve-project/1). --ir files are sniffed by the format key: delve-ir/0\n"
@@ -120,6 +122,8 @@ bool parseArgs(int argc, char** argv, CliArgs& args, std::string& err) {
             if (!needValue(i, a, args.name)) return false;
         } else if (a == "--assets") {
             if (!needValue(i, a, args.assets)) return false;
+        } else if (a == "--unit") {
+            if (!needValue(i, a, args.unit)) return false;
         } else if (a == "--seed" || a == "--attempts" || a == "--threads") {
             std::string v;
             if (!needValue(i, a, v)) return false;
@@ -491,10 +495,19 @@ int cmdCheck(Context& ctx, const CliArgs& args, const std::string& argv0) {
         !ensureFill(ctx, args, argv0, diags))
         return finishCmd(args, 1, diags);
     std::vector<delve::CheckDiag> checks;
-    const bool ok = delve::check_level(ctx.ir, ctx.project, ctx.fill, checks);
+    bool ok;
+    nlohmann::ordered_json stats;
+    if (args.unit.empty()) {
+        ok = delve::check_level(ctx.ir, ctx.project, ctx.fill, checks);
+        stats["errors"] = checks.size();
+    } else {
+        size_t matched = 0;
+        ok = delve::check_units(ctx.fill, args.unit, checks, &matched);
+        stats["errors"] = checks.size();
+        stats["units"] = matched;
+    }
     for (const delve::CheckDiag& c : checks)
         diags.push_back(delve::make_diag("D600", c.message));
-    const nlohmann::ordered_json stats{{"errors", checks.size()}};
     if (ok) return finishCmd(args, 0, diags, stats, "check: ok");
     return finishCmd(args, 1, diags, stats);
 }

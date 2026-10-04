@@ -19,6 +19,7 @@
 
 #include "pgg/eval.h"
 #include "pgg/src/eval/param_text.h"
+#include "fill.h"
 #include "project.h"
 
 namespace {
@@ -220,6 +221,70 @@ TEST(DelveAssets, CodesParity) {
         e.code("no_such_" + std::string(e.name), ok);
         EXPECT_FALSE(ok) << e.prefix;
     }
+}
+
+std::string slotDiagText(const std::vector<delve::SlotDiag>& ds) {
+    std::string t;
+    for (const auto& d : ds) t += (d.warning ? "[W] " : "[E] ") + d.code + ": " + d.message + "\n";
+    return t;
+}
+
+// A2 contract lint: one synthetic run + strict output-schema checks (delve/lint).
+TEST(DelveAssets, ContractLintA2) {
+    const std::string assets = DELVE_ASSETS_DIR;
+    // Clean real assets pass the lint for their slot (door is @style-exempt by
+    // contract; decor:lamp exercises the shared decor contract).
+    for (const auto& [slot, asset] : std::vector<std::pair<std::string, std::string>>{
+             {"door", "doors/opening_v1.pgg"},
+             {"decor:lamp", "decor/lamp_v1.pgg"},
+             {"room_fill", "rooms/fill_v1.pgg"}}) {
+        SCOPED_TRACE(asset);
+        std::vector<delve::SlotDiag> ds;
+        ASSERT_TRUE(delve::check_asset(slot, assets + "/" + asset, {assets}, ds))
+            << slotDiagText(ds);
+        EXPECT_TRUE(delve::lint_asset(slot, assets + "/" + asset, {assets}, ds))
+            << slotDiagText(ds);
+        // No lint findings at all — not even the "inconclusive" warning (the
+        // synthetic inputs must really drive these assets).
+        for (const auto& d : ds) EXPECT_NE(d.code, "delve/lint") << slotDiagText(ds);
+    }
+    // A dirty asset (leftover group + no @Cd) passes the static stage but
+    // fails the lint with delve/lint findings.
+    const std::string dir = testing::TempDir();
+    const std::string path = dir + "/lint_dirty.pgg";
+    {
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        out <<
+            "param contour: geo<points>\n"
+            "param h: f32 = 3.0\n"
+            "param role: int = 1\n"
+            "param style_floor: int = 1\n"
+            "param style_ceil: int = 3\n"
+            "param rng_seed: int = 7\n"
+            "\n"
+            "def slot_version() -> (out: int) {\n"
+            "    out = 1\n"
+            "}\n"
+            "\n"
+            "slab = box(size = vec3(1.0, 0.1, 1.0), res = 1)\n"
+            "styled = set(slab, \"style\", style_floor, domain = points)\n"
+            "mesh = mark(styled, \"leftover\", where = true)\n"
+            "anchors = empty_points()\n"
+            "\n"
+            "output mesh\n"
+            "output anchors\n";
+    }
+    std::vector<delve::SlotDiag> ds;
+    ASSERT_TRUE(delve::check_asset("room_fill", path, {assets}, ds)) << slotDiagText(ds);
+    EXPECT_FALSE(delve::lint_asset("room_fill", path, {assets}, ds));
+    bool sawGroup = false, sawCd = false;
+    for (const auto& d : ds) {
+        if (d.code != "delve/lint") continue;
+        sawGroup = sawGroup || d.message.find("group 'leftover'") != std::string::npos;
+        sawCd = sawCd || d.message.find("@Cd") != std::string::npos;
+    }
+    EXPECT_TRUE(sawGroup) << slotDiagText(ds);
+    EXPECT_TRUE(sawCd) << slotDiagText(ds);
 }
 
 }  // namespace
