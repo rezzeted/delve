@@ -550,6 +550,9 @@ json ServeRuntime::handleAssetCheck(uint64_t clientId, const json& args) {
     for (const std::string& r : slot.project.asset_roots)
         roots.push_back((fs::path(slot.project.dir) / r).string());
     roots.push_back(m_assets);
+    // Same R-A5 tail as fill_level: slot assets may import the PGG lib.
+    if (const std::string pggLib = delve::find_pgg_lib_root(m_assets); !pggLib.empty())
+        roots.push_back(pggLib);
     // A relative asset resolves against the delve assets dir first, then the
     // project asset_roots.
     std::string resolved = asset;
