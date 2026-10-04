@@ -1,0 +1,113 @@
+# Delve slot asset: decor lamp v2 (slots §2.6) — forged-iron lantern look.
+# Wall mount: own lantern assembly from lib.parts/rod/ring/pyramid_cap (same
+# design as lib.fixtures.lantern, but every part plane is either >=1 mm from
+# any other part's plane or buried in a neighbour volume — the lib version
+# stacks rail tops, post ends and the base plate in shared planes and
+# F11/elements rejects the coincident pairs). Local wall plane z=0 mapped onto
+# the anchor normal, plate sunk 0.02 into the facing blocks.
+# Ceiling mount: lib.ironwork.hanging_lantern on the anchor (knob at the
+# ceiling). Iron goes dark with an fbm mottle, glass (group "lamp") warm amber;
+# lib groups are stripped before output (assembly merge rejects them, D500).
+# Exactly one light anchor at the glass center, dir = @n.
+
+import codes as c
+import lib.parts as parts
+import lib.fixtures as fixtures
+import lib.ironwork as iron
+
+def slot_version() -> (out: int) {
+    out = 1
+}
+
+param p: geo<points>
+param style: int = 1
+param tag: int = 1
+param rng_seed: int = 7
+
+
+root = rng_from_seed(rng_seed)
+fbm_rng = split_rng(root, key = "fbm")
+
+at = value(@P, on = p)
+mn = normalize(value(@n, on = p))
+wall = abs(dot(mn, (0, 1, 0))) < 0.5
+yaw = degrees(atan2(dot(mn, (1, 0, 0)), dot(mn, (0, 0, 1))))
+
+# Lantern body axis at z = 0.32 off the wall. F11/elements rejects any two
+# coplanar overlapping faces, so every part plane is either >=1 mm away from
+# every other part's plane or buried inside a neighbour volume (butt joints and
+# equal-height rails are forbidden: their shared planes z-fight). Lattice:
+# posts x{+-0.092,+-0.108} z{0.212,0.228,0.412,0.428} y+-0.146;
+# x-rails z{0.408,0.424}/{0.216,0.232} y{0.126,0.140}/{-0.140,-0.126}, ends
+# +-0.10 (post centers); z-rails x{0.088,0.104}, y staggered +-0.131 vs +-0.133,
+# ends 0.22/0.42; glass x{0.091,0.097} z{0.223,0.229}/{0.411,0.417}, edges
+# 0.090/0.230/0.410; mullions z{0.413,0.425} x{0.093,0.105}, ends buried in
+# posts, z-running pair raised 2.5 mm (same-y crossing bars would z-fight); rim y{0.144,0.160} (cap base 0.155 inside); base y{-0.160,-0.142}
+# (drop top -0.158 inside).
+def lantern_wall() -> (out: geo<mesh>) {
+    plate = parts.piece(size = vec3(0.10, 0.18, 0.02), pos = vec3(0.0, 0.30, 0.008), grp = "iron")
+    arm = fixtures.rod(p0 = vec3(0.0, 0.30, 0.02), p1 = vec3(0.0, 0.38, 0.14), p2 = vec3(0.0, 0.38, 0.30), p3 = vec3(0.0, 0.32, 0.32), r = 0.013, n = 12)
+    brace = fixtures.rod(p0 = vec3(0.0, 0.22, 0.02), p1 = vec3(0.0, 0.24, 0.16), p2 = vec3(0.0, 0.30, 0.24), p3 = vec3(0.0, 0.355, 0.235), r = 0.009, n = 12)
+    curl = fixtures.rod(p0 = vec3(0.0, 0.355, 0.235), p1 = vec3(0.0, 0.37, 0.20), p2 = vec3(0.0, 0.33, 0.18), p3 = vec3(0.0, 0.325, 0.21), r = 0.008, n = 10)
+    link1 = fixtures.ring(center = vec3(0.0, 0.29, 0.32), radius = 0.028, r = 0.005, yaw_deg = 0.0)
+    link2 = fixtures.ring(center = vec3(0.0, 0.25, 0.32), radius = 0.024, r = 0.005, yaw_deg = 90.0)
+    finial = mark(transform(ico_sphere(subdiv = 1, radius = 0.018), translate = vec3(0.0, 0.225, 0.32)), "iron", where = true, domain = faces)
+    cap = fixtures.pyramid_cap(base = vec3(0.0, 0.155, 0.32), half = 0.13, h = 0.07, tip = 0.02)
+    rim = parts.piece(size = vec3(0.262, 0.016, 0.262), pos = vec3(0.0, 0.152, 0.32), grp = "iron")
+    post_a = parts.piece(size = vec3(0.016, 0.292, 0.016), pos = vec3(0.10, 0.0, 0.42), grp = "iron")
+    post_b = parts.piece(size = vec3(0.016, 0.292, 0.016), pos = vec3(0.0 - 0.10, 0.0, 0.42), grp = "iron")
+    post_c = parts.piece(size = vec3(0.016, 0.292, 0.016), pos = vec3(0.10, 0.0, 0.22), grp = "iron")
+    post_d = parts.piece(size = vec3(0.016, 0.292, 0.016), pos = vec3(0.0 - 0.10, 0.0, 0.22), grp = "iron")
+    rail_tf = parts.piece(size = vec3(0.20, 0.014, 0.016), pos = vec3(0.0, 0.133, 0.416), grp = "iron")
+    rail_tb = parts.piece(size = vec3(0.20, 0.014, 0.016), pos = vec3(0.0, 0.133, 0.224), grp = "iron")
+    rail_tl = parts.piece(size = vec3(0.016, 0.014, 0.20), pos = vec3(0.0 - 0.096, 0.131, 0.32), grp = "iron")
+    rail_tr = parts.piece(size = vec3(0.016, 0.014, 0.20), pos = vec3(0.096, 0.131, 0.32), grp = "iron")
+    rail_bf = parts.piece(size = vec3(0.20, 0.014, 0.016), pos = vec3(0.0, 0.0 - 0.133, 0.416), grp = "iron")
+    rail_bb = parts.piece(size = vec3(0.20, 0.014, 0.016), pos = vec3(0.0, 0.0 - 0.133, 0.224), grp = "iron")
+    rail_bl = parts.piece(size = vec3(0.016, 0.014, 0.20), pos = vec3(0.0 - 0.096, 0.0 - 0.131, 0.32), grp = "iron")
+    rail_br = parts.piece(size = vec3(0.016, 0.014, 0.20), pos = vec3(0.096, 0.0 - 0.131, 0.32), grp = "iron")
+    glass_f = parts.piece(size = vec3(0.18, 0.266, 0.006), pos = vec3(0.0, 0.0, 0.414), grp = "lamp")
+    glass_b = parts.piece(size = vec3(0.18, 0.266, 0.006), pos = vec3(0.0, 0.0, 0.226), grp = "lamp")
+    glass_l = parts.piece(size = vec3(0.006, 0.266, 0.18), pos = vec3(0.0 - 0.094, 0.0, 0.32), grp = "lamp")
+    glass_r = parts.piece(size = vec3(0.006, 0.266, 0.18), pos = vec3(0.094, 0.0, 0.32), grp = "lamp")
+    mull_f = parts.piece(size = vec3(0.20, 0.012, 0.012), pos = vec3(0.0, 0.0, 0.419), grp = "iron")
+    mull_b = parts.piece(size = vec3(0.20, 0.012, 0.012), pos = vec3(0.0, 0.0, 0.221), grp = "iron")
+    mull_l = parts.piece(size = vec3(0.012, 0.012, 0.20), pos = vec3(0.0 - 0.099, 0.0025, 0.32), grp = "iron")
+    mull_r = parts.piece(size = vec3(0.012, 0.012, 0.20), pos = vec3(0.099, 0.0025, 0.32), grp = "iron")
+    base = parts.piece(size = vec3(0.24, 0.018, 0.24), pos = vec3(0.0, 0.0 - 0.151, 0.32), grp = "iron")
+    drop = fixtures.pyramid_cap(base = vec3(0.0, 0.0 - 0.158, 0.32), half = 0.06, h = 0.0 - 0.05, tip = 0.008)
+    out = merge(plate, arm, brace, curl, link1, link2, finial, cap, rim, post_a, post_b, post_c, post_d, rail_tf, rail_tb, rail_tl, rail_tr, rail_bf, rail_bb, rail_bl, rail_br, glass_f, glass_b, glass_l, glass_r, mull_f, mull_b, mull_l, mull_r, base, drop)
+}
+
+wall_m = transform(lantern_wall(), rotate = vec3(0.0, yaw, 0.0), translate = at - mn * 0.02)
+ceil_m = iron.hanging_lantern(top = at, s = 0.8)
+
+iron_c = vec3(0.12, 0.10, 0.085)
+glass_c = vec3(1.0, 0.60, 0.24)
+
+# Color on points (E609): glass = points of the lib "lamp" group, the rest is
+# iron with an fbm mottle. The wall lantern's glass planes are staggered by
+# construction (see lantern_wall), no positional fixup needed. The "bulb" core
+# (ceiling variant) sits inside the capped glass spool — invisible, colored
+# with the iron. Lib groups are stripped before the assembly merge (D500).
+w_s = set(wall_m, "style", style, domain = points)
+w_c = set(w_s, "Cd", ingroup("lamp") ? glass_c : iron_c * (0.85 + 0.30 * fbm(scale = 6.0, octaves = 2, rng = split_rng(fbm_rng, key = "wall"))), domain = points)
+wall_norm = unmark(unmark(unmark(w_c, "edge"), "iron"), "lamp")
+wall_clean = compute_normals(remove_attr(remove_attr(remove_attr(wall_norm, "uv"), "t"), "N"), mode = smooth)
+
+c_s = set(ceil_m, "style", style, domain = points)
+c_g = set_position(c_s, offset = @N * (ingroup("lamp") ? 0.0 - 0.0007 : 0.0))
+c_c = set(c_g, "Cd", ingroup("lamp") ? glass_c : iron_c * (0.85 + 0.30 * fbm(scale = 6.0, octaves = 2, rng = split_rng(fbm_rng, key = "ceil"))), domain = points)
+ceil_norm = unmark(unmark(unmark(c_c, "iron"), "lamp"), "bulb")
+ceil_clean = compute_normals(remove_attr(remove_attr(remove_attr(ceil_norm, "uv"), "t"), "N"), mode = smooth)
+
+mesh = select(wall, a = wall_clean, b = ceil_clean)
+
+light_at = wall ? at + mn * 0.30 : at + mn * 0.45
+a0 = transform(mesh_line(count = 1, length = 0.0), translate = light_at)
+a1 = set(a0, "kind", c.AK_LIGHT(), domain = points)
+a2 = set(a1, "dir", mn, domain = points, typeinfo = vector)
+anchors = set(a2, "range", 6.0, domain = points)
+
+output mesh
+output anchors

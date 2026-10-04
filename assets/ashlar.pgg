@@ -1,0 +1,28 @@
+# Delve asset library: ashlar masonry palette (the v2 look, iso project).
+# Style codes stay codes.pgg's; this is their deeper, warm-shifted rendering —
+# two-stop ramps mixed by a low mottle factor, then per-block shade jitter.
+# Shared by the v2 slot assets (facing / node / door / fill) so the whole
+# level reads as one material system. Demo keeps the v1 pastel codes.pgg ramp.
+
+import codes as c
+
+def ashlar_lo(style: int) -> (out: vec3) {
+    """Dark end of the style ramp (recessed, sooty side)."""
+    out = style == c.ST_STONE() ? vec3(0.30, 0.29, 0.28) : (style == c.ST_BRICK() ? vec3(0.40, 0.19, 0.12) : (style == c.ST_PLAIN() ? vec3(0.55, 0.52, 0.47) : (style == c.ST_MORTAR() ? vec3(0.33, 0.31, 0.29) : (style == c.ST_SANDSTONE() ? vec3(0.50, 0.42, 0.29) : vec3(1.0, 0.0, 1.0)))))
+}
+
+def ashlar_hi(style: int) -> (out: vec3) {
+    """Light end of the style ramp (fresh face)."""
+    out = style == c.ST_STONE() ? vec3(0.46, 0.45, 0.43) : (style == c.ST_BRICK() ? vec3(0.66, 0.34, 0.21) : (style == c.ST_PLAIN() ? vec3(0.74, 0.71, 0.65) : (style == c.ST_MORTAR() ? vec3(0.42, 0.40, 0.37) : (style == c.ST_SANDSTONE() ? vec3(0.72, 0.62, 0.44) : vec3(1.0, 0.0, 1.0)))))
+}
+
+def ashlar_color(style: int, shade: f32, mot: f32) -> (out: vec3) {
+    """Block color: ramp by mottle mot in [0,1], then per-block shade jitter."""
+    base = mix(ashlar_lo(style = style), ashlar_hi(style = style), mot)
+    out = base * vec3(shade * 1.04, shade, shade * 0.96)
+}
+
+def mortar_color(style: int, mot: f32) -> (out: vec3) {
+    """Recessed joint / wall-core color behind the blocks (grayed dark style)."""
+    out = mix(ashlar_lo(style = style), ashlar_hi(style = style), mot) * vec3(0.55, 0.54, 0.52)
+}

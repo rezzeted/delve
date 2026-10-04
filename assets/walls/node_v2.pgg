@@ -1,0 +1,85 @@
+# Delve slot asset: node v2 (slots §2.4) — ashlar masonry look.
+# Pillar core in dark mortar tone + open faces dressed with beveled blocks
+# (lib.parts.cbox) instanced on an anchor cloud: course rows of 2-wide
+# elements (split at face center) as in v1, but with per-block palette color
+# (ashlar.pgg) in @tint, micro scale jitter opening mortar joints to the core,
+# and an fbm mottle baked into Cd at the end (points domain, E609 merge rule).
+# Closed faces are absent from `faces` by construction; no running bond on
+# faces, face width = thick exactly. Zone pieces via elem_zone_face
+# (whole-element rule).
+
+import codes as c
+import patterns as z
+import ashlar as a
+import lib.parts as parts
+
+def slot_version() -> (out: int) {
+    out = 1
+}
+
+param faces: geo<points>
+param thick: f32 = 0.6
+param h_pillar: f32 = 3.0
+param style: int = 1
+param module: f32 = 0.25
+param zones: geo<points>
+param rng_seed: int = 7
+
+
+root = rng_from_seed(rng_seed)
+fbm_rng = split_rng(root, key = "fbm")
+
+pillar_bare = transform(box(size = vec3(thick, h_pillar, thick), res = 1), translate = vec3(0.0, h_pillar * 0.5, 0.0))
+pillar_s = set(pillar_bare, "style", style, domain = points)
+pillar = set(pillar_s, "tint", a.mortar_color(style = style, mot = 0.45), domain = points)
+
+def face_rows(center: vec3, normal: vec3, face_h: f32, face_style: int, p_thick: f32, p_module: f32, p_zones: geo<points>, p_face: int, p_rng: rng) -> (out: geo<mesh>) {
+    """Beveled-block courses of one open face (local: face plane through center,
+    out = normal; blocks embed 0.01 into the pillar). Local +x = right of the
+    normal (slots §2.4); the IR flip covers +s parity."""
+    tx = dot(normal, (0, 0, 1))
+    tzz = 0.0 - dot(normal, (1, 0, 0))
+    yaw = degrees(atan2(0.0 - tzz, tx))
+    rows = int(floor(face_h / p_module))
+    half = p_thick * 0.5
+    depth = 0.06
+    cloud = repeat (empty_points(), iterations = rows * 2) |acc| {
+        e = @iteration
+        r = e / 2
+        side = e % 2
+        y0 = f32(r) * p_module
+        y1 = y0 + p_module
+        x0 = side == 0 ? 0.0 - half : 0.0
+        x1 = side == 0 ? 0.0 : half
+        code = z.elem_zone_face(own = face_style, x0 = x0, x1 = x1, y0 = y0, y1 = y1, zones = p_zones, face = p_face)
+        pt0 = transform(mesh_line(count = 1, length = 0.0), translate = vec3((x0 + x1) * 0.5, (y0 + y1) * 0.5, depth * 0.5 - 0.01))
+        pt1 = set(pt0, "style", code, domain = points)
+        erng = split_rng(p_rng, key = e)
+        shade = value(random(0.80, 1.18, rng = split_rng(erng, key = "shade")), on = pt0)
+        mot = value(fbm(scale = 1.6, octaves = 2, rng = split_rng(erng, key = "mot")), on = pt0)
+        pt2 = set(pt1, "tint", a.ashlar_color(style = code, shade = shade, mot = mot), domain = points)
+        pt3 = set(pt2, "scale", value(random(0.94, 1.0, rng = split_rng(erng, key = "scale")), on = pt0), domain = points)
+        pt4 = set_position(pt3, offset = vec3(0.0, 0.0, value(random(0.0, 0.010, rng = split_rng(erng, key = "z")), on = pt0)))
+        acc = merge(acc, select(code >= 0, a = pt4, b = empty_points()))
+    }
+    block = parts.cbox(size = vec3(half, p_module, depth), k = 0.0, k_abs = 0.012)
+    # realize() materializes only @tint (builtin contract), so @style would be
+    # lost: instance per style class and paint each realized mesh instead.
+    cours = repeat (empty_mesh(), iterations = 5) |acc2| {
+        k = @iteration + 1
+        sub = delete(cloud, where = @style != k)
+        acc2 = merge(acc2, set(realize(instance_on_points(sub, source = block)), "style", k, domain = points))
+    }
+    out = transform(cours, rotate = vec3(0.0, yaw, 0.0), translate = center)
+}
+
+dressed = foreach f in faces {
+    f = face_rows(center = value(@P, on = f), normal = value(@n, on = f), face_h = value(@h, on = f), face_style = value(@style, on = f), p_thick = thick, p_module = module, p_zones = zones, p_face = value(@face, on = f), p_rng = split_rng(root, key = value(@face, on = f)))
+}
+
+colored = unmark(set(merge(pillar, dressed), "Cd", @tint * (0.92 + 0.16 * fbm(scale = 2.3, octaves = 2, rng = fbm_rng)), domain = points), "edge")
+mesh = compute_normals(remove_attr(remove_attr(colored, "tint"), "N"), mode = smooth)
+anchors = empty_points()
+
+output mesh
+output anchors

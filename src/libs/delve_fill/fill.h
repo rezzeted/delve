@@ -32,6 +32,12 @@ bool check_asset(const std::string& slot, const std::string& asset_path,
                  const std::vector<std::string>& import_roots,
                  std::vector<SlotDiag>& diags);
 
+// R-A5 last-resort root: the PGG product lib (thirdparty/pgg/resources/pgg)
+// the delve repo vendors as a submodule, located by walking up from the delve
+// assets dir. Empty when the layout is not the repo one. Callers append it
+// after the delve assets dir so slot assets can import lib.* (N3, §9.2).
+std::string find_pgg_lib_root(const std::string& delveAssets);
+
 // F6: expand the IR into units (slots §1 ids), run each unit's asset in its
 // local frame (R-A9) and assemble the world-frame level: meshes merged,
 // anchors merged with a per-point @label "<unit_id>#<kind>" (kind =

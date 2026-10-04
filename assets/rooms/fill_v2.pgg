@@ -1,13 +1,16 @@
-# Delve slot asset: room_fill v2 (slots §2.1). Stone-tile floor with accent
-# patterns (medallion / border / cross, rng-picked) clipped to the room
-# contour — figured plans (L, cross) get the floor, the mortar bed and the
-# ceiling only inside the walls. Optional ceiling (style_ceil == 0 skips it:
-# no-roof iso rooms). Barrel cluster for halls/crypts hugs an rng-picked
+# Delve slot asset: room_fill v2 (slots §2.1). Cobblestone floor (Roads-style
+# setts on a running-bond grid: per-stone tint from the ashlar palette, micro
+# tilt/scale jitter opening dark mortar joints to the bed below) with
+# rng-picked accent patterns (medallion / border / cross) — clipped to the
+# room contour, so figured plans (L, cross) get the floor, the mortar bed and
+# the ceiling only inside the walls. Optional ceiling (style_ceil == 0 skips
+# it: no-roof iso rooms). Barrel cluster for halls/crypts hugs an rng-picked
 # polygon vertex (convex or concave — never outside the walls).
 # Light anchor only with a ceiling; spawn for halls.
 
 import codes as c
 import props
+import ashlar as a
 
 def slot_version() -> (out: int) {
     out = 1
@@ -30,21 +33,20 @@ cz = (dot(lo, (0, 0, 1)) + dot(hi, (0, 0, 1))) * 0.5
 root = rng_from_seed(rng_seed)
 pat_rng = split_rng(root, key = "pattern")
 bar_rng = split_rng(root, key = "barrels")
+flr_rng = split_rng(root, key = "floor")
+fbm_rng = split_rng(root, key = "fbm")
 variant = value(random_int(4, rng = pat_rng), on = mesh_line(count = 1, length = 0.0))
 
 pitch = 0.5
-tile = 0.46
 nx = int(floor(sx / pitch))
 nz = int(floor(sz / pitch))
 ox = cx - f32(nx) * pitch * 0.5
 oz = cz - f32(nz) * pitch * 0.5
-base_col = c.style_color(style = style_floor)
-accent_col = c.style_color(style = c.ST_BRICK())
 
-# Tile centers over the bbox pitch grid, clipped by the contour. A kept
-# center overhangs the polygon edge by <= half a tile (0.23 m); the wall
-# (thick/2 = 0.3 m) covers it. The grid id rides along for the pattern
-# areas and the Cd jitter below.
+# Mortar bed and ceiling cells over the bbox pitch grid, clipped by the
+# contour. A kept center overhangs the polygon edge by <= half a cell
+# (0.23 m); the wall (thick/2 = 0.3 m) covers it. The ceiling slab only
+# exists when the room has a ceiling at all.
 cand = repeat (empty_points(), iterations = nx * nz) |acc| {
     e = @iteration
     p0 = transform(mesh_line(count = 1, length = 0.0),
@@ -54,42 +56,77 @@ cand = repeat (empty_points(), iterations = nx * nz) |acc| {
 }
 kept = delete(cand, where = !inside_polygon(contour))
 
-# Mortar bed and ceiling slab per kept cell: both clip like the floor (the
-# ceiling slab only exists when the room has a ceiling at all).
 bed = foreach cell in kept {
     tx = dot(value(@P, on = cell), (1, 0, 0))
     tz = dot(value(@P, on = cell), (0, 0, 1))
     bb = transform(box(size = vec3(pitch, 0.16, pitch), res = 1), translate = vec3(tx, 0.0 - 0.1205, tz))
     bs = set(bb, "style", style_floor, domain = points)
-    bed_tile = set(bs, "Cd", c.style_color_mortar(style = style_floor), domain = points)
+    bed_tile = set(bs, "Cd", a.mortar_color(style = style_floor, mot = 0.45) * 0.8, domain = points)
     cb = transform(box(size = vec3(pitch, 0.2, pitch), res = 1), translate = vec3(tx, h + 0.1, tz))
     cs = set(cb, "style", style_ceil, domain = points)
-    ceil_tile = set(cs, "Cd", c.style_color(style = style_ceil), domain = points)
+    ceil_tile = set(cs, "Cd", a.ashlar_color(style = style_ceil, shade = 0.72, mot = 0.3), domain = points)
     cell = merge(bed_tile, select(style_ceil != 0, a = ceil_tile, b = empty_mesh()))
 }
 
-tiles = foreach cell in kept {
-    e = value(@id, on = cell)
-    tx = dot(value(@P, on = cell), (1, 0, 0))
-    tz = dot(value(@P, on = cell), (0, 0, 1))
-    dxc = tx - cx
-    dzc = tz - cz
+# Sett anchors: running-bond grid (odd rows shift half a stone), centers kept
+# inside the contour. Per stone: @tint from the ashlar ramp (floors read
+# darker than walls, ~10% warm stones), @scale opens the mortar joint, micro
+# tilt/yaw/height jitter keeps neighbour tops out of plane.
+spx = 0.42
+spz = 0.38
+snx = int(floor(sx / spx))
+snz = int(floor(sz / spz))
+sox = cx - f32(snx) * spx * 0.5
+soz = cz - f32(snz) * spz * 0.5
+stone_w = 0.38
+stone_l = 0.34
+stone_h = 0.07
+
+cloud = repeat (empty_points(), iterations = snx * snz) |acc| {
+    e = @iteration
+    r = e / snx
+    cc = e % snx
+    bond = r % 2 == 1 ? spx * 0.5 : 0.0
+    px0 = sox + (f32(cc) + 0.5) * spx + bond
+    pz0 = soz + (f32(r) + 0.5) * spz
+    pt0 = transform(mesh_line(count = 1, length = 0.0), translate = vec3(px0, 0.0, pz0))
+    inside = value(inside_polygon(contour), on = pt0)
+    erng = split_rng(flr_rng, key = e)
+    shade = value(random(0.62, 1.04, rng = split_rng(erng, key = "shade")), on = pt0)
+    mot = value(0.5 + 0.5 * fbm(scale = 1.9, octaves = 2, rng = split_rng(erng, key = "mot")), on = pt0)
+    base = a.ashlar_color(style = style_floor, shade = shade * 0.88, mot = mot)
+    lum = dot(base, vec3(0.35, 0.55, 0.10))
+    grayed = mix(base, vec3(lum, lum, lum), 0.55)
+    warm = value(random(0.0, 1.0, rng = split_rng(erng, key = "warm")), on = pt0)
+    toned = warm < 0.10 ? mix(grayed, vec3(0.48, 0.33, 0.22), 0.55) : grayed
+    dxc = px0 - cx
+    dzc = pz0 - cz
     dc = sqrt(dxc * dxc + dzc * dzc)
-    edge = min(min(tx - ox, ox + f32(nx) * pitch - tx), min(tz - oz, oz + f32(nz) * pitch - tz))
+    edge = min(min(px0 - sox, sox + f32(snx) * spx - px0), min(pz0 - soz, soz + f32(snz) * spz - pz0))
     a_med = dc < min(sx, sz) * 0.25
-    a_bord = edge < pitch
-    a_cross = (sqrt(dxc * dxc) < pitch * 0.75) | (sqrt(dzc * dzc) < pitch * 0.75)
+    a_bord = edge < spx
+    a_cross = (sqrt(dxc * dxc) < spx * 0.75) | (sqrt(dzc * dzc) < spx * 0.75)
     accent = variant == 1 ? a_med : (variant == 2 ? a_bord : (variant == 3 ? a_cross : false))
-    tb = box(size = vec3(tile, 0.04, tile), res = 1)
-    tm = transform(tb, translate = vec3(tx, 0.0 - 0.02, tz))
-    ti = set(tm, "id", e, domain = points)
-    ts = set(ti, "style", style_floor, domain = points)
-    cell = set(ts, "Cd", accent ? accent_col : base_col, domain = points)
+    band = f32(int(dc / (spx * 2.0)) % 2)
+    amt = variant == 1 ? 0.38 + 0.22 * band : 0.48
+    tint = accent ? mix(toned, vec3(0.44, 0.25, 0.15), amt) * 0.88 : toned
+    pt1 = set(pt0, "style", style_floor, domain = points)
+    pt2 = set(pt1, "tint", tint, domain = points)
+    pt3 = set(pt2, "scale", value(random(0.93, 1.0, rng = split_rng(erng, key = "scale")), on = pt0), domain = points)
+    tj = value(random(0.0 - 1.1, 1.1, rng = split_rng(erng, key = "tiltp")), on = pt0)
+    rj = value(random(0.0 - 1.1, 1.1, rng = split_rng(erng, key = "tiltr")), on = pt0)
+    yj = value(random(0.0 - 2.5, 2.5, rng = split_rng(erng, key = "yawj")), on = pt0)
+    pt4 = set(pt3, "orient", orient_from_euler(vec3(tj, yj, rj)), domain = points)
+    pt5 = set_position(pt4, offset = vec3(0.0, value(random(0.0 - 0.006, 0.008, rng = split_rng(erng, key = "dy")), on = pt0), 0.0))
+    acc = merge(acc, select(inside, a = pt5, b = empty_points()))
 }
 
-hv = sin(f32(@id) * 12.9898) * 43758.5453
-jit = 0.94 + (hv - floor(hv)) * 0.12
-tiles_c = set(tiles, "Cd", @Cd * jit, domain = points)
+# Stone tops stay strictly below y=0 (max rise from dy+tilt is ~0.013): F11
+# opening_voids counts any styled face above 0 in a doorway band.
+stone = compute_normals(transform(box(size = vec3(stone_w, stone_h, stone_l), res = 1), translate = vec3(0.0, 0.0 - stone_h * 0.5 - 0.014, 0.0)), mode = flat)
+floor_r = realize(instance_on_points(cloud, source = stone))
+floor_s = set(floor_r, "style", style_floor, domain = points)
+floor_c = set(floor_s, "Cd", @tint * (0.90 + 0.20 * fbm(scale = 2.6, octaves = 2, rng = fbm_rng)), domain = points)
 
 # Barrel cluster (halls/crypts): L-pile of up to 3 at an rng-picked polygon
 # vertex, hugging the two walls of its corner. The probe decides which side
@@ -120,7 +157,11 @@ barrels = repeat (empty_mesh(), iterations = nb) |acc| {
 }
 barrel_part = select(is_store, a = barrels, b = empty_mesh())
 
-mesh = merge(bed, tiles_c, barrel_part)
+# Assembly-merge normalization: drop the instance payload (@tint) and every
+# normal, then rebuild smooth corner normals so no vec2/mixed-N reaches the
+# level merge (D500).
+merged = merge(bed, floor_c, barrel_part)
+mesh = compute_normals(remove_attr(remove_attr(merged, "tint"), "N"), mode = smooth)
 
 # Anchors sit at the bbox center when it is inside the room (rects, crosses);
 # otherwise they fall back to the barrel nook, which is always inside.

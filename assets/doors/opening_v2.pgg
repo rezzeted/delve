@@ -1,0 +1,110 @@
+# Delve slot asset: door v2 (slots §2.5) — stone portal look.
+# Jamb columns of beveled blocks (lib.parts.cbox) proud of the wall faces
+# (depth = thick + 0.20 clears the facing blocks at 0.082), a joggled flat
+# arch (alternating ±2.5° blocks, wider dropped keystone) whose top embeds
+# 0.02 into the wall lintel, and a threshold step. open = clear portal;
+# gate = forged iron grate (bars + rails, pointed bar tops). Fixed neutral
+# palette by contract (no style param): sandstone trim, dark iron.
+# Cd on points (E609); per-block shade jitter from rng_seed.
+
+import codes as c
+import ashlar as a
+import lib.parts as parts
+import lib.fixtures as fx
+
+def slot_version() -> (out: int) {
+    out = 1
+}
+
+param seg: geo<points>
+param h: f32 = 2.2
+param frame: f32 = 0.15
+param thick: f32 = 0.6
+param dtype: int = 1
+param rng_seed: int = 7
+
+
+p0 = value(@P, on = delete(seg, where = @index != 0))
+p1 = value(@P, on = delete(seg, where = @index != 1))
+dir = p1 - p0
+L = length(dir)
+yaw = degrees(atan2(0.0 - dot(dir, (0, 0, 1)), dot(dir, (1, 0, 0))))
+base = vec3(dot(p0, (1, 0, 0)), 0.0, dot(p0, (0, 0, 1)))
+
+root = rng_from_seed(rng_seed)
+probe = mesh_line(count = 1, length = 0.0)
+
+trim_style = c.ST_SANDSTONE()
+jdepth = thick + 0.20
+jw = 0.17
+
+# Jamb columns: one block per course, exact division of h.
+rows = 8
+bh = h / f32(rows)
+jambs = repeat (empty_mesh(), iterations = rows * 2) |acc| {
+    e = @iteration
+    r = e / 2
+    side = e % 2
+    xc = side == 0 ? 0.0 - jw * 0.5 : L + jw * 0.5
+    erng = split_rng(root, key = 100 + e)
+    shade = value(random(0.80, 1.12, rng = split_rng(erng, key = "shade")), on = probe)
+    mot = value(fbm(scale = 1.6, octaves = 2, rng = split_rng(erng, key = "mot")), on = probe)
+    col = a.ashlar_color(style = trim_style, shade = shade * 0.92, mot = mot)
+    bl = parts.cbox(size = vec3(jw, bh, jdepth), k = 0.0, k_abs = 0.012)
+    bp = transform(bl, translate = vec3(xc, bh * (f32(r) + 0.5), 0.0))
+    acc = merge(acc, set(bp, "Cd", col, domain = points))
+}
+
+# Joggled flat arch across the opening: alternating tilt, dropped keystone at
+# the center, top edge embedded 0.02 into the wall lintel (no coplanarity).
+# Longer and deeper than the jambs so no face shares a plane with them
+# (F11/elements rejects coincident pairs).
+lw = L + 0.40
+nl = max(5, int(lw / 0.26))
+bw = lw / f32(nl)
+lintel = repeat (empty_mesh(), iterations = nl) |acc| {
+    i = @iteration
+    xc = 0.0 - 0.20 + bw * (f32(i) + 0.5)
+    jog = i % 2 == 0 ? 2.5 : 0.0 - 2.5
+    key = i == nl / 2
+    bhh = key ? 0.27 : 0.24
+    yc = h + 0.02 - bhh * 0.5 + (key ? 0.0 - 0.02 : 0.0)
+    erng = split_rng(root, key = 300 + i)
+    shade = value(random(0.80, 1.12, rng = split_rng(erng, key = "shade")), on = probe)
+    mot = value(fbm(scale = 1.6, octaves = 2, rng = split_rng(erng, key = "mot")), on = probe)
+    col = a.ashlar_color(style = trim_style, shade = shade * 0.98, mot = mot)
+    bl = parts.cbox(size = vec3(key ? bw * 1.15 : bw, bhh, jdepth + 0.02 + 0.004 * f32(i % 2)), k = 0.0, k_abs = 0.012)
+    bp = transform(bl, rotate = vec3(0.0, 0.0, jog), translate = vec3(xc, yc, 0.0))
+    acc = merge(acc, set(bp, "Cd", col, domain = points))
+}
+
+# Threshold step: proud of the floor by 0.03, ends beyond the jambs (again no
+# shared face planes).
+sill0 = parts.cbox(size = vec3(L + 0.42, 0.08, thick + 0.16), k = 0.0, k_abs = 0.015)
+sill1 = transform(sill0, translate = vec3(L * 0.5, 0.0 - 0.01, 0.0))
+sill = set(sill1, "Cd", a.ashlar_color(style = trim_style, shade = 0.78, mot = 0.4), domain = points)
+
+# Gate: forged bars (pointed tops) + two rails, mid-thickness of the wall.
+# Bar tops embed 3 mm into the tip bases: stacked faces must not be coplanar.
+iron_c = vec3(0.10, 0.095, 0.09)
+nb = max(2, int(L / 0.22))
+bars = repeat (empty_mesh(), iterations = nb) |acc| {
+    i = @iteration
+    xc = L * (f32(i) + 0.5) / f32(nb)
+    bar = transform(box(size = vec3(0.05, h - 0.31, 0.05), res = 1), translate = vec3(xc, 0.03 + (h - 0.31) * 0.5, 0.0))
+    tip = remove_attr(fx.pyramid_cap(base = vec3(xc, h - 0.283, 0.0), half = 0.035, h = 0.05, tip = 0.005), "uv")
+    acc = merge(acc, bar, tip)
+}
+rail_a = transform(box(size = vec3(L - 0.06, 0.06, 0.06), res = 1), translate = vec3(L * 0.5, 0.7, 0.05))
+rail_b = transform(box(size = vec3(L - 0.06, 0.06, 0.06), res = 1), translate = vec3(L * 0.5, 1.5, 0.05))
+grate0 = merge(bars, rail_a, rail_b)
+grate = unmark(set(grate0, "Cd", iron_c, domain = points), "iron")
+
+portal = unmark(merge(jambs, lintel, sill), "edge")
+local_mesh = merge(portal, select(dtype == c.DR_GATE(), a = grate, b = empty_mesh()))
+placed = transform(local_mesh, rotate = vec3(0.0, yaw, 0.0), translate = base)
+mesh = compute_normals(remove_attr(placed, "N"), mode = smooth)
+anchors = empty_points()
+
+output mesh
+output anchors

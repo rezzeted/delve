@@ -66,11 +66,11 @@
   },
   "slots": {
     "room_fill": "rooms/fill_v2.pgg",
-    "wall_body": "walls/body_v1.pgg",
-    "facing": "walls/facing_v1.pgg",
-    "node": "walls/node_v1.pgg",
-    "door": "doors/opening_v1.pgg",
-    "decor:lamp": "decor/lamp_v1.pgg"
+    "wall_body": "walls/body_v2.pgg",
+    "facing": "walls/facing_v2.pgg",
+    "node": "walls/node_v2.pgg",
+    "door": "doors/opening_v2.pgg",
+    "decor:lamp": "decor/lamp_v2.pgg"
   },
   "asset_roots": ["assets"]
 }

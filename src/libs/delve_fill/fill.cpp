@@ -707,8 +707,12 @@ bool mergeGeos(const std::vector<pgg::GeoPtr>& parts, pgg::GeoKind kind, pgg::Ge
             err = "delve/run: mixed geo kinds in assembly merge";
             return false;
         }
-        if (g->instanceSources || g->pointGroups || g->cornerGroups || g->faceGroups ||
-            g->detailAttrs || g->detailGroups) {
+        // Empty sets survive unmark/remove_attr (the structure stays allocated
+        // with zero columns); dropping those is lossless, so only non-empty
+        // groups/detail/instances are rejected here.
+        auto nonEmpty = [](const auto& setPtr) { return setPtr && !setPtr->columns.empty(); };
+        if (g->instanceSources || nonEmpty(g->pointGroups) || nonEmpty(g->cornerGroups) ||
+            nonEmpty(g->faceGroups) || nonEmpty(g->detailAttrs) || nonEmpty(g->detailGroups)) {
             err = "delve/run: groups/detail/instances unsupported in assembly merge";
             return false;
         }
@@ -800,6 +804,21 @@ pgg::GeoPtr labelAnchors(const pgg::GeoPtr& g, const std::string& unit, std::str
 
 }  // namespace
 
+std::string find_pgg_lib_root(const std::string& delveAssets) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::path cur = fs::weakly_canonical(delveAssets, ec);
+    if (ec || cur.empty()) return {};
+    for (int depth = 0; depth < 8; ++depth) {
+        const fs::path cand = cur / "thirdparty" / "pgg" / "resources" / "pgg";
+        if (fs::is_directory(cand / "lib", ec)) return cand.string();
+        const fs::path parent = cur.parent_path();
+        if (parent == cur) break;
+        cur = parent;
+    }
+    return {};
+}
+
 bool fill_level(const IrV2& ir, const Project& project, const FillOpts& opts, FillResult& out,
                 std::string& err) {
     out = FillResult{};
@@ -811,6 +830,10 @@ bool fill_level(const IrV2& ir, const Project& project, const FillOpts& opts, Fi
     for (const auto& r : project.asset_roots)
         roots.push_back((std::filesystem::path(project.dir) / r).string());
     roots.push_back(opts.delve_assets);
+    // R-A5 search order ends at the PGG product lib: slot assets may import
+    // lib.* (parts, blockwork, masonry, ...) without copying (N3, §9.2).
+    if (const std::string pggLib = find_pgg_lib_root(opts.delve_assets); !pggLib.empty())
+        roots.push_back(pggLib);
 
     // Needed slots (only kinds with units; lamps iff some room exists).
     std::map<std::string, size_t> need = {{"room_fill", ir.rooms.size()},
