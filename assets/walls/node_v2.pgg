@@ -4,6 +4,8 @@
 # elements (split at face center) as in v1, but with per-block palette color
 # (ashlar.pgg) in @tint, micro scale jitter opening mortar joints to the core,
 # and an fbm mottle baked into Cd at the end (points domain, E609 merge rule).
+# Same rare relief as the facing: ~3% of blocks recessed (darker), ~4% proud
+# on a deeper block anchored in the pillar.
 # The pillar is shortened by 0.22 and crowned with one big cap stone (face
 # planes 2 mm off the wall_body cap band) plus the same two-step cornice as
 # the facing on every open face (fronts 2 mm wider than the facing rows).
@@ -58,20 +60,35 @@ def face_rows(center: vec3, normal: vec3, face_h: f32, face_style: int, p_thick:
         pt0 = transform(mesh_line(count = 1, length = 0.0), translate = vec3((x0 + x1) * 0.5, (y0 + y1) * 0.5, depth * 0.5 - 0.01))
         pt1 = set(pt0, "style", code, domain = points)
         erng = split_rng(p_rng, key = e)
-        shade = value(random(0.80, 1.18, rng = split_rng(erng, key = "shade")), on = pt0)
+        # Same rare relief as the facing: ~3% recessed (darker), ~4% proud
+        # (deep block below keeps the back anchored in the pillar).
+        rel = value(random(0.0, 1.0, rng = split_rng(erng, key = "relief")), on = pt0)
+        rcls = rel < 0.03 ? 1 : (rel < 0.07 ? 2 : 0)
+        shade = value(random(0.80, 1.18, rng = split_rng(erng, key = "shade")), on = pt0) * (rcls == 1 ? 0.80 : (rcls == 2 ? 1.05 : 1.0))
         mot = value(fbm(scale = 1.6, octaves = 2, rng = split_rng(erng, key = "mot")), on = pt0)
         pt2 = set(pt1, "tint", a.ashlar_color(style = code, shade = shade, mot = mot), domain = points)
         pt3 = set(pt2, "scale", value(random(0.94, 1.0, rng = split_rng(erng, key = "scale")), on = pt0), domain = points)
-        pt4 = set_position(pt3, offset = vec3(0.0, 0.0, value(random(0.0, 0.010, rng = split_rng(erng, key = "z")), on = pt0)))
+        pt3b = set(pt3, "relief", rcls, domain = points)
+        dzj = value(random(0.0, 0.010, rng = split_rng(erng, key = "z")), on = pt0)
+        dz = rcls == 1 ? 0.0 - value(random(0.02, 0.035, rng = split_rng(erng, key = "rec")), on = pt0) : (rcls == 2 ? value(random(0.04, 0.06, rng = split_rng(erng, key = "pro")), on = pt0) : dzj)
+        pt4 = set_position(pt3b, offset = vec3(0.0, 0.0, dz))
         acc = merge(acc, select(code >= 0, a = pt4, b = empty_points()))
     }
     block = parts.cbox(size = vec3(half, p_module, depth), k = 0.0, k_abs = 0.012)
+    # Deep variant for proud blocks: same front plane, back anchored ~6 cm
+    # into the pillar (bossage, not a floating tile).
+    block_deep = transform(parts.cbox(size = vec3(half, p_module, 0.16), k = 0.0, k_abs = 0.012), translate = vec3(0.0, 0.0, 0.0 - 0.05))
     # realize() materializes only @tint (builtin contract), so @style would be
     # lost: instance per style class and paint each realized mesh instead.
     cours = repeat (empty_mesh(), iterations = 5) |acc2| {
         k = @iteration + 1
-        sub = delete(cloud, where = @style != k)
+        sub = delete(cloud, where = (@style != k) | (@relief == 2))
         acc2 = merge(acc2, set(realize(instance_on_points(sub, source = block)), "style", k, domain = points))
+    }
+    cours_p = repeat (empty_mesh(), iterations = 5) |acc2| {
+        k = @iteration + 1
+        sub = delete(cloud, where = (@style != k) | (@relief != 2))
+        acc2 = merge(acc2, set(realize(instance_on_points(sub, source = block_deep)), "style", k, domain = points))
     }
     # Cornice: same two stepped rows as the facing (3 mm shadow gaps between
     # all tiers — shared vertical planes never cut two tiers at once), fronts
@@ -98,7 +115,7 @@ def face_rows(center: vec3, normal: vec3, face_h: f32, face_style: int, p_thick:
         sls = set(slt, "style", code2, domain = points)
         acc3 = merge(acc3, select(code2 >= 0, a = sls, b = empty_mesh()))
     }
-    out = transform(merge(cours, corn), rotate = vec3(0.0, yaw, 0.0), translate = center)
+    out = transform(merge(cours, cours_p, corn), rotate = vec3(0.0, yaw, 0.0), translate = center)
 }
 
 dressed = foreach f in faces {

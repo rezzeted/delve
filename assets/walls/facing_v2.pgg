@@ -4,7 +4,9 @@
 # clipped afterwards), but the element is a beveled block (lib.parts.cbox)
 # instanced on an anchor cloud: per-block palette color (ashlar.pgg) baked
 # into @tint, micro scale jitter opening mortar joints to the wall core, fbm
-# mottle over the placed mesh. The courses stop one row under the wall_body
+# mottle over the placed mesh. Rare relief (~3% recessed and darker, ~4%
+# proud bossage on a deeper block anchored in the core) breaks the plane.
+# The courses stop one row under the wall_body
 # cap band; the freed strip [rows*module, h - 0.24] carries a two-step
 # cornice (zone-styled ledge slabs, 3 mm shadow gaps between all tiers).
 # Elements protrude to local -Z as in v1 (into
@@ -72,23 +74,42 @@ cloud = repeat (empty_points(), iterations = rows * cols) |acc| {
                     translate = vec3((x0 + x1) * 0.5, (y0 + y1) * 0.5, 0.0 - depth * 0.5))
     pt1 = set(pt0, "style", code, domain = points)
     erng = split_rng(root, key = e)
-    shade = value(random(0.80, 1.18, rng = split_rng(erng, key = "shade")), on = pt0)
+    # Rare relief: ~3% of blocks recessed into the wall (darker, in shadow),
+    # ~4% proud (bossage — instanced from the deeper source block below so the
+    # back stays anchored in the core); the rest keep the micro jitter only.
+    rel = value(random(0.0, 1.0, rng = split_rng(erng, key = "relief")), on = pt0)
+    rcls = rel < 0.03 ? 1 : (rel < 0.07 ? 2 : 0)
+    shade = value(random(0.80, 1.18, rng = split_rng(erng, key = "shade")), on = pt0) * (rcls == 1 ? 0.80 : (rcls == 2 ? 1.05 : 1.0))
     mot = value(fbm(scale = 1.6, octaves = 2, rng = split_rng(erng, key = "mot")), on = pt0)
     pt2 = set(pt1, "tint", a.ashlar_color(style = code, shade = shade, mot = mot), domain = points)
     pt3 = set(pt2, "scale", value(random(0.94, 1.0, rng = split_rng(erng, key = "scale")), on = pt0), domain = points)
-    pt4 = set_position(pt3, offset = vec3(0.0, 0.0, 0.0 - value(random(0.0, 0.012, rng = split_rng(erng, key = "z")), on = pt0)))
+    pt3b = set(pt3, "relief", rcls, domain = points)
+    dzj = value(random(0.0, 0.012, rng = split_rng(erng, key = "z")), on = pt0)
+    dzz = rcls == 1 ? value(random(0.025, 0.045, rng = split_rng(erng, key = "rec")), on = pt0) : (rcls == 2 ? 0.0 - value(random(0.03, 0.05, rng = split_rng(erng, key = "pro")), on = pt0) : 0.0 - dzj)
+    pt4 = set_position(pt3b, offset = vec3(0.0, 0.0, dzz))
     acc = merge(acc, select(keep, a = pt4, b = empty_points()))
 }
 
 block = parts.cbox(size = vec3(elem_len, module, depth), k = 0.0, k_abs = 0.012)
+# Deep variant for the rare proud blocks (@relief == 2): same front plane as
+# the regular block at the same anchor, but the back reaches ~8 cm into the
+# wall core — a proud stone reads as bossage, not a floating tile.
+block_deep = transform(parts.cbox(size = vec3(elem_len, module, 0.15), k = 0.0, k_abs = 0.012), translate = vec3(0.0, 0.0, 0.04))
 # realize() materializes only @tint (builtin contract), so @style would be
 # lost: instance per style class and paint each realized mesh instead.
 coursed = repeat (empty_mesh(), iterations = 5) |acc| {
     k = @iteration + 1
-    sub = delete(cloud, where = @style != k)
+    sub = delete(cloud, where = (@style != k) | (@relief == 2))
     cls = realize(instance_on_points(sub, source = block))
     acc = merge(acc, set(cls, "style", k, domain = points))
 }
+coursed_p = repeat (empty_mesh(), iterations = 5) |acc| {
+    k = @iteration + 1
+    sub = delete(cloud, where = (@style != k) | (@relief != 2))
+    cls = realize(instance_on_points(sub, source = block_deep))
+    acc = merge(acc, set(cls, "style", k, domain = points))
+}
+all_blocks = merge(coursed, coursed_p)
 
 # Cornice (галтель): two stepped ledge rows between the courses and the body
 # cap band (the band owns [h - 0.24, h]). The courses STOP below the cornice
@@ -123,7 +144,7 @@ cornice = repeat (empty_mesh(), iterations = ncr * 2) |acc| {
     acc = merge(acc, select(code >= 0, a = sls, b = empty_mesh()))
 }
 
-placed = transform(merge(coursed, cornice), rotate = vec3(0.0, yaw, 0.0), translate = base)
+placed = transform(merge(all_blocks, cornice), rotate = vec3(0.0, yaw, 0.0), translate = base)
 
 carved = repeat (placed, iterations = count(cuts) / 2) |acc| {
     i = @iteration
