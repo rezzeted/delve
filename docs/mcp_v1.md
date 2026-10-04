@@ -170,8 +170,9 @@ replay: заново `load` всех известных проектов (отв
 `PggSession` с рецептами бинаря из `thirdparty/pgg`, корень pgg-репо —
 env `PGG_REPO_ROOT` или `<delve>/thirdparty/pgg`; бинарь — env `PGG_SERVE`
 или кандидаты пресетов pgg). Подъём ленивый — pgg-процесс не стартует до
-первого вызова `pgg_*`; у PggServe GPU-рендер, поэтому на Linux без DISPLAY
-подъём через `xvfb-run -a` (нет xvfb → `unreachable` с hint'ом). `need_build`
+первого вызова `pgg_*`; на Linux PggServe стартует с `--headless` (GLX
+pbuffer, окна нет — gpuReady синхронно), без DISPLAY — поверх через
+`xvfb-run -a` (нет xvfb → `unreachable` с hint'ом). `need_build`
 — с командами сборки pgg от корня `thirdparty/pgg` (см. `thirdparty/pgg/AGENTS.md`).
 Контракт ops — `thirdparty/pgg/docs/pgg/serve_rpc.md`.
 

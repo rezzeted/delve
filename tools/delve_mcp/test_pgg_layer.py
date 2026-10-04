@@ -177,7 +177,7 @@ class PggSessionEnsureTests(unittest.TestCase):
             session = self._session(root, cmds, platform="linux",
                                     environ={"DISPLAY": ":0"})
             self.assertIsNone(session.ensure())
-            self.assertEqual(cmds, [[binary, "--port=9878", "--host=127.0.0.1"]])
+            self.assertEqual(cmds, [[binary, "--port=9878", "--host=127.0.0.1", "--headless"]])
 
     def test_linux_headless_uses_xvfb(self) -> None:
         with tempfile.TemporaryDirectory() as root:
@@ -187,7 +187,7 @@ class PggSessionEnsureTests(unittest.TestCase):
                                     which_fn=lambda _name: "/usr/bin/xvfb-run")
             self.assertIsNone(session.ensure())
             self.assertEqual(cmds, [["/usr/bin/xvfb-run", "-a", binary,
-                                     "--port=9878", "--host=127.0.0.1"]])
+                                     "--port=9878", "--host=127.0.0.1", "--headless"]])
 
     def test_linux_headless_without_xvfb_is_unreachable(self) -> None:
         with tempfile.TemporaryDirectory() as root:

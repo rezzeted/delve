@@ -411,6 +411,9 @@ class DelveSession:
     REPLAY_KEYS: ClassVar[tuple[str, ...]] = ("path",)
     # DelveServe is CPU-only; PggServe renders on the GPU and wants a display.
     NEEDS_DISPLAY: ClassVar[bool] = False
+    # Extra argv for the daemon on Linux (PggServe: "--headless" — GLX pbuffer
+    # instead of the tiny window; the display connection is still required).
+    LINUX_EXTRA_ARGS: ClassVar[tuple[str, ...]] = ()
 
     repo_root: str = field(default_factory=default_repo_root)
     host: str = DEFAULT_HOST
@@ -508,6 +511,8 @@ class DelveSession:
 
         env = self._env()
         cmd: list[str] = [serve, f"--port={self.port}", f"--host={self.host}"]
+        if self.platform == "linux":
+            cmd.extend(self.LINUX_EXTRA_ARGS)
         if self.NEEDS_DISPLAY and self.platform == "linux" and not env.get("DISPLAY"):
             xvfb = self.which_fn("xvfb-run")
             if xvfb:
@@ -725,7 +730,8 @@ class DelveSession:
 
 @dataclass
 class PggSession(DelveSession):
-    """PggServe flavor: GPU daemon (xvfb on headless Linux), pgg repo root, port 9878."""
+    """PggServe flavor: GPU daemon (--headless on Linux: pbuffer, no window; xvfb
+    only when DISPLAY is unset), pgg repo root, port 9878."""
 
     APP: ClassVar[str] = _PGG_SERVE_NAME
     DEFAULT_PORT: ClassVar[int] = PGG_DEFAULT_PORT
@@ -736,6 +742,7 @@ class PggSession(DelveSession):
     SLOT_OPS: ClassVar[frozenset] = _PGG_SLOT_OPS
     REPLAY_KEYS: ClassVar[tuple[str, ...]] = ("path", "lib_roots")
     NEEDS_DISPLAY: ClassVar[bool] = True
+    LINUX_EXTRA_ARGS: ClassVar[tuple[str, ...]] = ("--headless",)
 
     repo_root: str = field(default_factory=pgg_repo_root)
 
