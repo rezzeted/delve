@@ -9,6 +9,22 @@
         "PYTHONUNBUFFERED": "1"
       },
       "startupTimeoutMs": 120000
+    },
+    "serena": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/oraios/serena@d0f7f92631c23dc4c5ed0b5ccd35bc623b19a809",
+        "serena",
+        "start-mcp-server",
+        "--context",
+        "ide-assistant",
+        "--project",
+        ".",
+        "--enable-web-dashboard",
+        "False"
+      ],
+      "startupTimeoutMs": 120000
     }
   }
 }
