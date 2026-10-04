@@ -62,7 +62,10 @@ struct SideRule {
 // spots: "any" (uniform), "center" (bbox center first), "near_door" (an
 // rng-picked doorway first); both fall back to "any" sampling. radius is the
 // item footprint for the occupied registry, min_dist an extra clearance on
-// top of it. "lamp" as a tag stays with lamp_step/lamp_place.
+// top of it. cut_r > 0 (D5): the placement also cuts a floor pit of that
+// radius (room_fill assets declaring the optional `cuts` input; others
+// silently keep a solid floor). "lamp" as a tag stays with
+// lamp_step/lamp_place.
 struct DecorRule {
     std::string tag;
     std::string place = "floor";       // floor | wall
@@ -72,6 +75,7 @@ struct DecorRule {
     double min_dist = 0.0;             // extra clearance vs occupied volumes
     std::string align = "any";         // any | center | near_door (floor only)
     double radius = 0.5;               // item footprint, meters
+    double cut_r = 0.0;                // floor pit radius, meters (0 = no cut)
 };
 
 struct FillParams {

@@ -18,6 +18,7 @@
 #include <nlohmann/json.hpp>
 
 #include "pgg/eval.h"
+#include "pgg/src/eval/modules.h"
 #include "pgg/src/eval/param_text.h"
 #include "fill.h"
 #include "project.h"
@@ -125,6 +126,8 @@ TEST(DelveAssets, AutonomyRA4) {
             std::filesystem::path(fixturePath).parent_path().string();
         pgg::RunParams rp;
         rp.importRoots = {assets};
+        // fill_v2 imports lib.plan/lib.ironwork (the PGG product lib, D5).
+        pgg::appendImportRoot(rp.importRoots, delve::find_pgg_lib_root(assets));
         for (const auto& [name, value] : fixture["params"].items()) {
             pgg::Value bound;
             std::string err;

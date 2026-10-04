@@ -4,6 +4,7 @@
 // F8: optional unit-output cache (cache.h), keyed by slot + bindings + asset
 // content (R-A7); local-frame hits are placed at assembly.
 
+#include <set>
 #include <string>
 #include <vector>
 
@@ -28,9 +29,12 @@ struct SlotDiag {
 // import_roots resolve the asset's imports (project roots + delve asset dir);
 // the asset's own directory is implicit. True when no errors (warnings ok).
 // Unknown slot kind -> false + a single delve/slot error.
+// declared_params (optional) collects the asset's param names — the host
+// binds optional inputs (room_fill `cuts`, decor `pit`) only when declared.
 bool check_asset(const std::string& slot, const std::string& asset_path,
                  const std::vector<std::string>& import_roots,
-                 std::vector<SlotDiag>& diags);
+                 std::vector<SlotDiag>& diags,
+                 std::set<std::string>* declared_params = nullptr);
 
 // Contract lint on top of check_asset: runs the asset once with minimal
 // synthetic inputs from the slot contract (seg/contour/... fixtures built in

@@ -5,6 +5,7 @@
 
 #include <filesystem>
 #include <map>
+#include <set>
 
 #include <glm/glm.hpp>
 
@@ -265,7 +266,7 @@ const pgg::AttrColumn* pointCol(const pgg::GeoPtr& g, const char* name) {
 
 bool check_asset(const std::string& slot, const std::string& asset_path,
                  const std::vector<std::string>& import_roots,
-                 std::vector<SlotDiag>& diags) {
+                 std::vector<SlotDiag>& diags, std::set<std::string>* declared_params) {
     // decor:<tag> shares the decor contract (slots §2.6: tag is a param).
     std::string kind = slot;
     if (kind.rfind("decor:", 0) == 0) kind = "decor";
@@ -300,6 +301,7 @@ bool check_asset(const std::string& slot, const std::string& asset_path,
             }
             info.hasDefault = p->hasDefault;
             params[p->name] = info;
+            if (declared_params) declared_params->insert(p->name);
         } else if (item->kind == pgg::NodeKind::OutputDecl) {
             outputs.push_back(static_cast<const pgg::OutputDecl*>(item)->name);
         } else if (item->kind == pgg::NodeKind::Def &&
@@ -370,7 +372,10 @@ bool check_asset(const std::string& slot, const std::string& asset_path,
         bool required = false;
         for (const ParamSpec& want : contract->second)
             if (want.name == name) required = true;
-        if (!required && !info.hasDefault)
+        // Extra geo inputs are host-bound stream data (like the contract geo
+        // params: slots §5 "geo comes from fixtures") — room_fill `cuts` (D5);
+        // non-geo extras still need a default (R-A2 autonomy).
+        if (!required && !info.hasDefault && info.base != "geo")
             diags.push_back({"delve/slot", where + ": extra param '" + name +
                                               "' needs a default (R-A2)"});
     }
@@ -421,6 +426,30 @@ bool lint_asset(const std::string& slot, const std::string& asset_path,
 
     pgg::RunParams rp;
     rp.values = synthBindings(kind);
+    // Extra geo inputs without defaults (room_fill `cuts`, D5) are host-bound
+    // stream data: the synthetic run binds them empty so the output lint
+    // stays conclusive.
+    {
+        const pgg::Document doc = pgg::parseFile(asset_path);
+        if (doc.file && !doc.hasErrors()) {
+            std::set<std::string> bound;
+            for (const auto& [name, v] : rp.values) bound.insert(name);
+            for (const pgg::Node* item : doc.file->items) {
+                if (item->kind != pgg::NodeKind::ParamDecl) continue;
+                const auto* p = static_cast<const pgg::ParamDecl*>(item);
+                if (p->hasDefault || bound.count(p->name) != 0 || !p->type ||
+                    p->type->base != "geo")
+                    continue;
+                auto g = std::make_shared<pgg::Geo>();
+                g->kind = p->type->geoKind == "mesh" ? pgg::GeoKind::Mesh
+                                                     : pgg::GeoKind::Points;
+                g->positions = std::make_shared<const std::vector<glm::vec3>>();
+                g->pointAttrs = std::make_shared<pgg::AttrSet>();
+                rp.values.emplace_back(p->name, pgg::Value(g));
+                bound.insert(p->name);
+            }
+        }
+    }
     rp.importRoots = roots;
     const pgg::RunResult r = pgg::runFile(asset_path, rp);
     if (r.hasErrors()) {

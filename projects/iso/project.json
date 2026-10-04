@@ -59,7 +59,7 @@
     },
     "transitions": {"pattern": "chase", "width": 1.0, "place": "corner"},
     "decor": [
-      {"tag": "drain", "place": "floor", "roles": ["hall", "crypt", "corridor"], "chance": 0.7}
+      {"tag": "drain", "place": "floor", "roles": ["hall", "crypt", "corridor"], "chance": 0.7, "cut_r": 0.28, "radius": 0.85}
     ],
     "side_rules": [
       {"match": {"adjacent_role": "corridor"}, "style": "brick"},

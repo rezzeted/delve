@@ -17,6 +17,7 @@
 
 #include "pgg/eval.h"
 #include "pgg/src/eval/geometry.h"
+#include "pgg/src/eval/modules.h"
 #include "pgg/src/eval/param_text.h"
 #include "fill.h"
 #include "ir.h"
@@ -634,6 +635,34 @@ TEST(DelveFill, AssetVariants) {
     };
     EXPECT_LT(runDoor(1), runDoor(2));
 
+    // D5: the drain's pit mode drops the ashlar surround and the fake water
+    // disc (the room_fill apron/shaft replaces them), keeping the grate.
+    auto runDrain = [&](int pit) {
+        pgg::RunParams rp;
+        rp.importRoots = {assets};
+        const std::string dir = assets + "/decor";
+        // drain_v2 imports lib.plan/lib.ironwork (the PGG product lib).
+        pgg::appendImportRoot(rp.importRoots, delve::find_pgg_lib_root(assets));
+        const std::vector<std::pair<std::string, std::string>> params = {
+            {"p", "@drain_v2.p.points.json"}, {"style", "1"}, {"tag", "2"},
+            {"rng_seed", "7"}, {"pit", std::to_string(pit)}};
+        for (const auto& [name, text] : params) {
+            pgg::Value v;
+            EXPECT_TRUE(pgg::parseParamText(text, dir, v, &err)) << err;
+            rp.values.emplace_back(name, v);
+        }
+        const pgg::RunResult r = pgg::runFile(dir + "/drain_v2.pgg", rp);
+        EXPECT_FALSE(r.hasErrors());
+        for (const auto& d : r.diagnostics) EXPECT_TRUE(d.isWarning) << d.message;
+        for (const auto& o : r.outputs)
+            if (o.name == "mesh") return pgg::asGeo(o.value)->pointCount();
+        return size_t(0);
+    };
+    const size_t drainSolid = runDrain(0);
+    const size_t drainPit = runDrain(1);
+    EXPECT_LT(drainPit, drainSolid);
+    EXPECT_GT(drainPit, 0u);  // the forged grate stays
+
     // Wall-mounted lamps aim along the mount normal (mount-agnostic asset).
     const std::string tmp = testing::TempDir() + "/delve_wall_lamp";
     std::filesystem::create_directories(tmp);
@@ -855,6 +884,55 @@ TEST(DelveFill, DecorWallPlace) {
         EXPECT_LT(c[0], 5.5 + 0.06);
     }
     EXPECT_GT(std::abs(centers[0][0] - centers[1][0]), 0.5);
+}
+
+// D5: a decor rule with cut_r > 0 punches a real pit into the room_fill
+// floor. fill_v2 on the 6x6 one-room IR with the drain at the bbox center
+// (3, 3): floor stones/bed gone from the bore (0.28 - 0.07 lining), a shaft
+// bottom ~0.6 m down, the radial-block apron ring on top. The room's barrel
+// blockers register once — the cut re-run must not duplicate them.
+TEST(DelveFill, DecorFloorCuts) {
+    const delve::IrV2 ir = oneRoomIr();
+    delve::Project p = loadDotProject(
+        "{\"tag\": \"drain\", \"align\": \"center\", \"cut_r\": 0.28, \"radius\": 0.85}");
+    p.slots["room_fill"] = "rooms/fill_v2.pgg";
+    p.slots["decor:drain"] = "empty_decor.pgg";  // mesh-free: pure placement
+    const delve::FillResult out = fillOneRoom(ir, p);
+
+    const double cx = 3.0, cz = 3.0;
+    size_t floorNear = 0, bottomNear = 0, apronNear = 0;
+    for (const glm::vec3& q : *out.mesh->positions) {
+        const double d = std::hypot((double)q.x - cx, (double)q.z - cz);
+        if (d < 0.20 && q.y > -0.05f) ++floorNear;  // bore is 0.21
+        if (d < 0.25 && q.y < -0.55f) ++bottomNear;
+        if (d > 0.30 && d < 0.63 && q.y > -0.02f && q.y < 0.0f) ++apronNear;
+    }
+    EXPECT_EQ(floorNear, 0u);   // setts/bed knocked out of the bore
+    EXPECT_GT(bottomNear, 0u);  // the shaft's dark bottom
+    EXPECT_GT(apronNear, 0u);   // the apron ring
+
+    // Baseline without cut_r: the floor stays solid at the spot, the same
+    // room blockers register (no duplicates from the re-run), the drain
+    // placement is in the registry either way.
+    delve::Project solid = loadDotProject(
+        "{\"tag\": \"drain\", \"align\": \"center\", \"radius\": 0.85}");
+    solid.slots["room_fill"] = "rooms/fill_v2.pgg";
+    solid.slots["decor:drain"] = "empty_decor.pgg";
+    const delve::FillResult base = fillOneRoom(ir, solid);
+    size_t baseNear = 0;
+    for (const glm::vec3& q : *base.mesh->positions)
+        if (std::hypot((double)q.x - cx, (double)q.z - cz) < 0.20 && q.y > -0.05f)
+            ++baseNear;
+    EXPECT_GT(baseNear, 0u);
+    auto countLabels = [](const delve::FillResult& r, const std::string& prefix) {
+        size_t n = 0;
+        for (const auto& o : r.occupied)
+            if (o.label.rfind(prefix, 0) == 0) ++n;
+        return n;
+    };
+    EXPECT_EQ(countLabels(out, "room:"), countLabels(base, "room:"));
+    EXPECT_EQ(countLabels(out, "deco:drain:"), 1u);
+    EXPECT_EQ(countLabels(base, "deco:drain:"), 1u);
 }
 
 TEST(DelveFill, FillRejects) {

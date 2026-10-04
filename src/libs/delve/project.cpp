@@ -373,7 +373,7 @@ bool load_project(const std::string& path, Project& out, std::string& err) {
                 for (const auto& [key, _] : r.items()) {
                     if (key != "tag" && key != "place" && key != "roles" && key != "chance" &&
                         key != "count" && key != "min_dist" && key != "align" &&
-                        key != "radius") {
+                        key != "radius" && key != "cut_r") {
                         err = path + ": " + where + "." + key + ": unknown key";
                         return false;
                     }
@@ -399,7 +399,8 @@ bool load_project(const std::string& path, Project& out, std::string& err) {
                     !get_num(r, "chance", rule.chance, err, where) ||
                     !get_num(r, "min_dist", rule.min_dist, err, where) ||
                     !get_str(r, "align", rule.align, err, where) ||
-                    !get_num(r, "radius", rule.radius, err, where))
+                    !get_num(r, "radius", rule.radius, err, where) ||
+                    !get_num(r, "cut_r", rule.cut_r, err, where))
                     return false;
                 if (rule.place != "floor" && rule.place != "wall") {
                     err = path + ": " + where + ".place: expected floor|wall";
@@ -426,6 +427,10 @@ bool load_project(const std::string& path, Project& out, std::string& err) {
                 }
                 if (!(rule.radius > 0.0)) {
                     err = path + ": " + where + ".radius: expected > 0";
+                    return false;
+                }
+                if (!(rule.cut_r >= 0.0)) {
+                    err = path + ": " + where + ".cut_r: expected >= 0";
                     return false;
                 }
                 if (r.contains("roles")) {

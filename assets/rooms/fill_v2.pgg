@@ -6,11 +6,17 @@
 # the ceiling only inside the walls. Optional ceiling (style_ceil == 0 skips
 # it: no-roof iso rooms). Barrel cluster for halls/crypts hugs an rng-picked
 # polygon vertex (convex or concave — never outside the walls).
+# D5: optional `cuts` (points with @range) punch floor pits — setts and bed
+# cells around a cut are dropped (the ceiling never cuts), the cut gets a
+# stone-lined shaft with a dark bottom, a mortar backing disc closing the
+# ragged bed edge and a radial-block apron on top.
 # Light anchor only with a ceiling; spawn for halls.
 
 import codes as c
 import props
 import ashlar as a
+import lib.plan as plan
+import lib.ironwork as iron
 
 def slot_version() -> (out: int) {
     out = 1
@@ -22,6 +28,7 @@ param role: int = 1
 param style_floor: int = 1
 param style_ceil: int = 3
 param rng_seed: int = 7
+param cuts: geo<points>
 
 
 lo, hi = bbox(contour)
@@ -35,6 +42,7 @@ pat_rng = split_rng(root, key = "pattern")
 bar_rng = split_rng(root, key = "barrels")
 flr_rng = split_rng(root, key = "floor")
 fbm_rng = split_rng(root, key = "fbm")
+pit_rng = split_rng(root, key = "pits")
 variant = value(random_int(4, rng = pat_rng), on = mesh_line(count = 1, length = 0.0))
 
 pitch = 0.5
@@ -46,7 +54,9 @@ oz = cz - f32(nz) * pitch * 0.5
 # Mortar bed and ceiling cells over the bbox pitch grid, clipped by the
 # contour. A kept center overhangs the polygon edge by <= half a cell
 # (0.23 m); the wall (thick/2 = 0.3 m) covers it. The ceiling slab only
-# exists when the room has a ceiling at all.
+# exists when the room has a ceiling at all. D5: bed cells overlapping a
+# floor pit are dropped from the floor only (cell half-diagonal margin 0.36,
+# so no surviving cell corners the bore) — the ceiling never cuts.
 cand = repeat (empty_points(), iterations = nx * nz) |acc| {
     e = @iteration
     p0 = transform(mesh_line(count = 1, length = 0.0),
@@ -55,17 +65,29 @@ cand = repeat (empty_points(), iterations = nx * nz) |acc| {
     acc = merge(acc, set(p0, "id", e, domain = points))
 }
 kept = delete(cand, where = !inside_polygon(contour))
+ncuts = count(cuts)
+kept_floor = repeat (kept, iterations = ncuts) |acc| {
+    i = @iteration
+    cp = value(@P, on = cuts, where = @index == i)
+    cr = max(value(@range, on = cuts, where = @index == i), 0.15)
+    acc = delete(acc, where = dot(@P - cp, @P - cp) < (cr + 0.36) * (cr + 0.36))
+}
 
-bed = foreach cell in kept {
+bed = foreach cell in kept_floor {
     tx = dot(value(@P, on = cell), (1, 0, 0))
     tz = dot(value(@P, on = cell), (0, 0, 1))
     bb = transform(box(size = vec3(pitch, 0.16, pitch), res = 1), translate = vec3(tx, 0.0 - 0.1205, tz))
     bs = set(bb, "style", style_floor, domain = points)
-    bed_tile = set(bs, "Cd", a.mortar_color(style = style_floor, mot = 0.45) * 0.8, domain = points)
+    cell = set(bs, "Cd", a.mortar_color(style = style_floor, mot = 0.45) * 0.8, domain = points)
+}
+
+ceil = foreach cell in kept {
+    tx = dot(value(@P, on = cell), (1, 0, 0))
+    tz = dot(value(@P, on = cell), (0, 0, 1))
     cb = transform(box(size = vec3(pitch, 0.2, pitch), res = 1), translate = vec3(tx, h + 0.1, tz))
     cs = set(cb, "style", style_ceil, domain = points)
     ceil_tile = set(cs, "Cd", a.ashlar_color(style = style_ceil, shade = 0.72, mot = 0.3), domain = points)
-    cell = merge(bed_tile, select(style_ceil != 0, a = ceil_tile, b = empty_mesh()))
+    cell = select(style_ceil != 0, a = ceil_tile, b = empty_mesh())
 }
 
 # Sett anchors: running-bond grid (odd rows shift half a stone), centers kept
@@ -121,10 +143,20 @@ cloud = repeat (empty_points(), iterations = snx * snz) |acc| {
     acc = merge(acc, select(inside, a = pt5, b = empty_points()))
 }
 
+# D5: setts overlapping a pit's apron zone are dropped (apron outer cr + 0.34
+# plus the stone half-diagonal 0.26, so no surviving stone straddles the
+# apron edge).
+cloud_c = repeat (cloud, iterations = ncuts) |acc| {
+    i = @iteration
+    cp = value(@P, on = cuts, where = @index == i)
+    cr = max(value(@range, on = cuts, where = @index == i), 0.15)
+    acc = delete(acc, where = dot(@P - cp, @P - cp) < (cr + 0.60) * (cr + 0.60))
+}
+
 # Stone tops stay strictly below y=0 (max rise from dy+tilt is ~0.013): F11
 # opening_voids counts any styled face above 0 in a doorway band.
 stone = compute_normals(transform(box(size = vec3(stone_w, stone_h, stone_l), res = 1), translate = vec3(0.0, 0.0 - stone_h * 0.5 - 0.014, 0.0)), mode = flat)
-floor_r = realize(instance_on_points(cloud, source = stone))
+floor_r = realize(instance_on_points(cloud_c, source = stone))
 floor_s = set(floor_r, "style", style_floor, domain = points)
 floor_c = set(floor_s, "Cd", @tint * (0.90 + 0.20 * fbm(scale = 2.6, octaves = 2, rng = fbm_rng)), domain = points)
 
@@ -173,11 +205,69 @@ blk = repeat (empty_points(), iterations = nb) |acc| {
 }
 blockers = select(is_store, a = blk, b = empty_points())
 
-# Assembly-merge normalization: drop the instance payload (@tint) and every
-# normal, then rebuild smooth corner normals so no vec2/mixed-N reaches the
-# level merge (D500).
-merged = merge(bed, floor_c, barrel_part)
-mesh = compute_normals(remove_attr(remove_attr(merged, "tint"), "N"), mode = smooth)
+# D5 floor pits: a stone-lined shaft per cut. The mortar backing disc (top
+# 4.5 mm under the bed top, so the weld never shares a plane) closes the
+# ragged bed edge out to cr + 0.75 — past the farthest dropped cell corner
+# (cr + 0.36 + 0.3536). The apron is a ring of 10 radial blocks on the disc
+# (2.4 deg joints, per-block top/shade jitter like the drain surround), ~6 mm
+# proud of the sett tops; the lining drops 0.66 m to a near-black bottom disc
+# welded into its foot. Bore radius cr - 0.07. All pit tops stay below y=0
+# (F11 opening_voids).
+pit_shell = repeat (empty_mesh(), iterations = ncuts) |acc| {
+    i = @iteration
+    cp = value(@P, on = cuts, where = @index == i)
+    cr = max(value(@range, on = cuts, where = @index == i), 0.15)
+    px = dot(cp, (1, 0, 0))
+    pz = dot(cp, (0, 0, 1))
+    shaft = plan.arc_shell(cx = px, cz = pz, r_in = cr - 0.07, r_out = cr + 0.005,
+                           a0 = 0.3, a1 = 359.7, y0 = 0.0 - 0.66, y1 = 0.0 - 0.011,
+                           grp = "pit", n = 18)
+    shaft_s = set(shaft, "style", style_floor, domain = points)
+    shaft_c = set(shaft_s, "Cd", a.ashlar_color(style = style_floor, shade = 0.42, mot = 0.5) * 0.55, domain = points)
+    bot = iron.spool(p0 = vec3(px, 0.0 - 0.62, pz), p1 = vec3(px, 0.0 - 0.598, pz),
+                     r0 = cr - 0.04, r1 = cr - 0.04, sides = 24)
+    bot_s = set(bot, "style", style_floor, domain = points)
+    bot_c = set(bot_s, "Cd", vec3(0.018, 0.02, 0.026), domain = points)
+    disc = plan.arc_shell(cx = px, cz = pz, r_in = cr - 0.02, r_out = cr + 0.75,
+                          a0 = 18.3, a1 = 377.7, y0 = 0.0 - 0.20, y1 = 0.0 - 0.045,
+                          grp = "pit", n = 32)
+    disc_s = set(disc, "style", style_floor, domain = points)
+    disc_c = set(disc_s, "Cd", a.mortar_color(style = style_floor, mot = 0.45) * 0.72, domain = points)
+    acc = merge(acc, shaft_c, bot_c, disc_c)
+}
+pit_apron = repeat (empty_mesh(), iterations = ncuts * 10) |acc| {
+    e = @iteration
+    i = e / 10
+    k = e % 10
+    cp = value(@P, on = cuts, where = @index == i)
+    cr = max(value(@range, on = cuts, where = @index == i), 0.15)
+    px = dot(cp, (1, 0, 0))
+    pz = dot(cp, (0, 0, 1))
+    erng = split_rng(split_rng(pit_rng, key = i), key = k)
+    probe = mesh_line(count = 1, length = 0.0)
+    a0 = f32(k) * 36.0 + 1.2 + value(random(0.0 - 0.5, 0.5, rng = split_rng(erng, key = "a0")), on = probe)
+    a1 = f32(k + 1) * 36.0 - 1.2 + value(random(0.0 - 0.5, 0.5, rng = split_rng(erng, key = "a1")), on = probe)
+    ytop = 0.0 - 0.008 + value(random(0.0 - 0.0015, 0.0015, rng = split_rng(erng, key = "yt")), on = probe)
+    ablk = plan.arc_shell(cx = px, cz = pz, r_in = cr - 0.02, r_out = cr + 0.34,
+                          a0 = a0, a1 = a1, y0 = 0.0 - 0.045, y1 = ytop, grp = "pit", n = 5)
+    shade = value(random(0.62, 1.04, rng = split_rng(erng, key = "shade")), on = probe)
+    mot = value(random(0.25, 0.75, rng = split_rng(erng, key = "mot")), on = probe)
+    warm = value(random(0.0, 1.0, rng = split_rng(erng, key = "warm")), on = probe)
+    base = a.ashlar_color(style = style_floor, shade = shade * 0.88, mot = mot)
+    lum = dot(base, vec3(0.35, 0.55, 0.10))
+    grayed = mix(base, vec3(lum, lum, lum), 0.55)
+    tint = warm < 0.10 ? mix(grayed, vec3(0.48, 0.33, 0.22), 0.55) : grayed
+    bs = set(ablk, "style", style_floor, domain = points)
+    acc = merge(acc, set(bs, "Cd", tint, domain = points))
+}
+pits = merge(pit_shell, pit_apron)
+
+# Assembly-merge normalization: strip the lib groups (arc_shell/spool mark
+# pit/iron), drop the sweep @uv, the instance payload (@tint) and every
+# normal, then rebuild smooth corner normals so no groups/vec2/mixed-N reach
+# the level merge (D500).
+merged = unmark(unmark(merge(bed, ceil, floor_c, barrel_part, pits), "pit"), "iron")
+mesh = compute_normals(remove_attr(remove_attr(remove_attr(merged, "uv"), "tint"), "N"), mode = smooth)
 
 # Anchors sit at the bbox center when it is inside the room (rects, crosses);
 # otherwise they fall back to the barrel nook, which is always inside.

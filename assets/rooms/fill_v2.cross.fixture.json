@@ -1,1 +1,1 @@
-{"params": {"contour": "@fill_v2.cross.points.json", "h": 3.2, "role": 1, "style_floor": 5, "style_ceil": 0, "rng_seed": 7}}
+{"params": {"contour": "@fill_v2.cross.points.json", "h": 3.2, "role": 1, "style_floor": 5, "style_ceil": 0, "rng_seed": 7, "cuts": "@fill_v2.cuts_empty.points.json"}}

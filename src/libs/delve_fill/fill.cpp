@@ -8,6 +8,7 @@
 #include <map>
 #include <numbers>
 #include <random>
+#include <set>
 
 #include <glm/glm.hpp>
 
@@ -481,18 +482,23 @@ bool expandLamps(const IrRoom& r, const IrV2& ir, double cell, double step,
 // v2 decor rules (fill.decor), "floor" mode: up to rule.count decor:<tag>
 // units per matching room, each rolled against rule.chance. Spots are
 // rejection-sampled from the room bbox with a 0.9 m wall inset and must keep
-// a 0.6 m apron fully inside a figured room's contour (doors start farther
-// from corners, so the apron also clears every doorway band), plus clear
-// every occupied volume (C4: room_fill blockers and this rule's own
-// placements) by o.r + rule.radius + rule.min_dist. align steers the first
-// tries: "center" probes the bbox center, "near_door" probes doorways of the
-// room (rng-rotated order) stepping toward the bbox center; both fall back
-// to uniform sampling. Deterministic per (fill_seed, tag, room); a cramped
-// room simply gets fewer units.
+// an apron fully inside a figured room's contour (doors start farther from
+// corners, so the apron also clears every doorway band); the apron grows
+// with the footprint (max(0.6, radius)). Spots must clear every occupied
+// volume (C4: room_fill blockers and this rule's own placements) by
+// o.r + rule.radius + rule.min_dist. align steers the first tries: "center"
+// probes the bbox center, "near_door" probes doorways of the room
+// (rng-rotated order) stepping toward the bbox center; both fall back to
+// uniform sampling. D5: with rule.cut_r > 0 a placement also records a floor
+// pit into floorCuts[room] (room_fill re-runs with it when its asset
+// declares `cuts`), and `pit` decor units get a pit=1 binding.
+// Deterministic per (fill_seed, tag, room); a cramped room simply gets
+// fewer units.
 bool expandDecorFloor(const IrRoom& r, const IrV2& ir, double cell, const DecorRule& rule,
-                      int fill_seed, const std::string& asset,
-                      std::vector<FillResult::Occupied>& occupied, std::vector<Unit>& units,
-                      std::string& err) {
+                      int fill_seed, const std::string& asset, bool pit,
+                      std::vector<FillResult::Occupied>& occupied,
+                      std::map<std::string, std::vector<FillResult::Occupied>>& floorCuts,
+                      std::vector<Unit>& units, std::string& err) {
     if (!rule.roles.empty() &&
         std::find(rule.roles.begin(), rule.roles.end(), r.role) == rule.roles.end())
         return true;
@@ -522,7 +528,7 @@ bool expandDecorFloor(const IrRoom& r, const IrV2& ir, double cell, const DecorR
         err = "delve/run: unknown decor tag '" + rule.tag + "'";
         return false;
     }
-    const double apron = 0.6;
+    const double apron = std::max(0.6, rule.radius);
     auto spotOk = [&](double x, double z) {
         if (!pointInRoomGrid(r, cell, x, z) ||
             !pointInRoomGrid(r, cell, x + apron, z) ||
@@ -593,6 +599,7 @@ bool expandDecorFloor(const IrRoom& r, const IrV2& ir, double cell, const DecorR
                       {"style", pgg::Value(style)},
                       {"tag", pgg::Value(tag)},
                       {"rng_seed", pgg::Value(unit_seed(fill_seed, u.id))}};
+        if (pit) u.bindings.emplace_back("pit", pgg::Value(1));
         u.tx = lx;
         u.ty = 0;
         u.tz = lz;
@@ -600,6 +607,8 @@ bool expandDecorFloor(const IrRoom& r, const IrV2& ir, double cell, const DecorR
         units.push_back(std::move(u));
         // The item's footprint joins the registry: later items keep clear.
         occupied.push_back({lx, lz, rule.radius, uid});
+        // D5: a cutting rule also punches a floor pit at the spot.
+        if (rule.cut_r > 0.0) floorCuts[r.id].push_back({lx, lz, rule.cut_r, uid});
     }
     return true;
 }
@@ -1131,6 +1140,7 @@ bool fill_level(const IrV2& ir, const Project& project, const FillOpts& opts, Fi
     for (const auto& rule : project.fill.decor)
         if (!ir.rooms.empty()) need["decor:" + rule.tag] = ir.rooms.size();
     std::map<std::string, std::string> assets;  // slot -> resolved file
+    std::map<std::string, std::set<std::string>> declared;  // slot -> param names
     for (const auto& [slot, n] : need) {
         if (n == 0) continue;
         const auto sit = project.slots.find(slot);
@@ -1152,7 +1162,7 @@ bool fill_level(const IrV2& ir, const Project& project, const FillOpts& opts, Fi
             return false;
         }
         std::vector<SlotDiag> ds;
-        if (!check_asset(slot, found, roots, ds)) {
+        if (!check_asset(slot, found, roots, ds, &declared[slot])) {
             err = "delve/slot [" + slot + " " + found + "]:";
             for (const auto& d : ds)
                 if (!d.warning) err += "\n  [" + d.code + "] " + d.message;
@@ -1185,30 +1195,35 @@ bool fill_level(const IrV2& ir, const Project& project, const FillOpts& opts, Fi
         units.push_back(std::move(u));
     }
 
-    std::vector<pgg::GeoPtr> meshes, anchors;
     if (!assets.empty())
         pgg::appendImportRoot(roots, pgg::findProductLibRoot(assets.begin()->second));
-    size_t meshOff = 0, anchorsOff = 0;
+
     // One unit through the F8 cache / PGG run, rigid placement and anchor
-    // labeling; appends the span and the merge inputs. room_fill blocker
-    // anchors (kind=4) split into out.occupied first (C4) — cache hits
-    // included, so the registry is complete on a warm refill too.
-    auto processUnit = [&](const Unit& u) -> bool {
+    // labeling. room_fill blocker anchors (kind=4) split into out.occupied
+    // when collectBlockers (C4) — cache hits included, so the registry is
+    // complete on a warm refill too. Spans, merge inputs and F8 stats are
+    // assembled only after the D5 room re-runs settled the final outputs.
+    struct UnitOut {
+        pgg::GeoPtr mesh, anchors;
+        uint64_t keyH = 0;
+        bool counted = false;  // F8 cache active: report in reused/reran
+        bool reused = false;
+    };
+    auto processUnit = [&](const Unit& u, bool collectBlockers, UnitOut& o) -> bool {
         pgg::GeoPtr mesh, anch;
-        uint64_t unitKeyH = 0;
         if (opts.cache) {
             UnitKey key;
             if (!unit_key(u.slot, assetKeys[u.slot], u.bindings, key, err)) return false;
-            unitKeyH = key.h;
+            o.keyH = key.h;
+            o.counted = true;
             UnitCache::Entry e;
             if (opts.cache->lookup(key, e)) {
                 mesh = e.mesh;
                 anch = e.anchors;
-                out.stats.reused.push_back(u.id);
+                o.reused = true;
             } else {
                 if (!runUnit(u, roots, opts.threads, mesh, anch, err)) return false;
                 opts.cache->store(key, mesh, anch);
-                out.stats.reran.push_back(u.id);
             }
         } else {
             if (!runUnit(u, roots, opts.threads, mesh, anch, err)) return false;
@@ -1218,32 +1233,35 @@ bool fill_level(const IrV2& ir, const Project& project, const FillOpts& opts, Fi
         anch = rigidGeo(anch, u.yawDeg, u.tx, u.ty, u.tz, u.id, err);
         if (!anch) return false;
         if (u.slot == "room_fill") {
-            anch = splitBlockers(anch, u.id, out.occupied, err);
+            if (collectBlockers) {
+                anch = splitBlockers(anch, u.id, out.occupied, err);
+            } else {
+                // D5 re-run: blockers were registered on the first pass.
+                std::vector<FillResult::Occupied> sink;
+                anch = splitBlockers(anch, u.id, sink, err);
+            }
             if (!anch) return false;
         }
         anch = labelAnchors(anch, u.id, err);
         if (!anch) return false;
-        FillResult::UnitSpan span;
-        span.id = u.id;
-        span.slot = u.slot;
-        span.meshBegin = meshOff;
-        span.meshEnd = meshOff + mesh->pointCount();
-        span.anchorsBegin = anchorsOff;
-        span.anchorsEnd = anchorsOff + anch->pointCount();
-        span.cacheKey = unitKeyH;
-        meshOff = span.meshEnd;
-        anchorsOff = span.anchorsEnd;
-        out.units.push_back(std::move(span));
-        meshes.push_back(std::move(mesh));
-        anchors.push_back(std::move(anch));
+        o.mesh = std::move(mesh);
+        o.anchors = std::move(anch);
         return true;
     };
 
-    // C4 phase 1: room fills run before any decor expansion, so floor decor
-    // picks spots with a complete occupied registry.
-    size_t done = 0;
-    for (; done < units.size(); ++done)
-        if (!processUnit(units[done])) return false;
+    // C4/D5 phase 1: room fills run before any decor expansion, so floor
+    // decor picks spots with a complete occupied registry. D5: a room_fill
+    // asset declaring `cuts` (a param has no geo-empty default in PGG, so the
+    // host always binds it) gets an empty pit list here; the phase-1b re-run
+    // of a cut room replaces it with the real pits.
+    const bool rfCuts = declared["room_fill"].count("cuts") != 0;
+    if (rfCuts)
+        for (auto& u : units)
+            u.bindings.emplace_back("cuts", pgg::Value(emptyGeo(pgg::GeoKind::Points)));
+    std::vector<UnitOut> outs(units.size());
+    for (size_t i = 0; i < units.size(); ++i)
+        if (!processUnit(units[i], true, outs[i])) return false;
+    const size_t roomCount = units.size();
 
     for (const auto& w : ir.walls) {
         Unit u;
@@ -1275,20 +1293,74 @@ bool fill_level(const IrV2& ir, const Project& project, const FillOpts& opts, Fi
                          project.fill.lamp_place, fseed, assets["decor:lamp"], units, err))
             return false;
     }
+    // Decor rules; D5 collects floor pits per room for the room_fill re-run.
+    std::map<std::string, std::vector<FillResult::Occupied>> floorCuts;
     for (const auto& rule : project.fill.decor)
         for (const auto& r : ir.rooms) {
             const std::string& asset = assets["decor:" + rule.tag];
             if (rule.place == "wall") {
                 if (!expandDecorWall(r, ir, rule, fseed, asset, units, err)) return false;
-            } else if (!expandDecorFloor(r, ir, project.fill.cell, rule, fseed, asset,
-                                         out.occupied, units, err)) {
-                return false;
+            } else {
+                const bool pit = rule.cut_r > 0.0 && rfCuts &&
+                                 declared["decor:" + rule.tag].count("pit") != 0;
+                if (!expandDecorFloor(r, ir, project.fill.cell, rule, fseed, asset, pit,
+                                      out.occupied, floorCuts, units, err))
+                    return false;
             }
         }
 
+    // D5 phase 1b: rooms with floor pits re-run with the real `cuts` binding
+    // replacing the empty phase-1 one (a new F8 key; blockers are not
+    // re-registered). Rooms whose room_fill asset does not declare `cuts`
+    // keep the phase-1 output.
+    if (rfCuts) {
+        for (size_t i = 0; i < roomCount; ++i) {
+            const auto it = floorCuts.find(ir.rooms[i].id);
+            if (it == floorCuts.end()) continue;
+            PointsBuilder cb;
+            for (const auto& c : it->second) {
+                cb.pt(c.x - units[i].tx, 0, c.z - units[i].tz);
+                cb.f32("range", c.r);
+            }
+            pgg::GeoPtr cutsGeo = cb.build(err);
+            if (!cutsGeo) return false;
+            for (auto& [name, val] : units[i].bindings)
+                if (name == "cuts") {
+                    val = pgg::Value(cutsGeo);
+                    break;
+                }
+            UnitOut o2;
+            if (!processUnit(units[i], false, o2)) return false;
+            outs[i] = std::move(o2);
+        }
+    }
+
     // C4 phase 2: everything past the room fills.
-    for (size_t i = done; i < units.size(); ++i)
-        if (!processUnit(units[i])) return false;
+    for (size_t i = roomCount; i < units.size(); ++i) {
+        outs.emplace_back();
+        if (!processUnit(units[i], true, outs[i])) return false;
+    }
+
+    // Assembly in unit order: spans, merge inputs, F8 stats.
+    std::vector<pgg::GeoPtr> meshes, anchors;
+    size_t meshOff = 0, anchorsOff = 0;
+    for (size_t i = 0; i < units.size(); ++i) {
+        const UnitOut& o = outs[i];
+        FillResult::UnitSpan span;
+        span.id = units[i].id;
+        span.slot = units[i].slot;
+        span.meshBegin = meshOff;
+        span.meshEnd = meshOff + o.mesh->pointCount();
+        span.anchorsBegin = anchorsOff;
+        span.anchorsEnd = anchorsOff + o.anchors->pointCount();
+        span.cacheKey = o.keyH;
+        meshOff = span.meshEnd;
+        anchorsOff = span.anchorsEnd;
+        out.units.push_back(std::move(span));
+        meshes.push_back(o.mesh);
+        anchors.push_back(o.anchors);
+        if (o.counted) (o.reused ? out.stats.reused : out.stats.reran).push_back(units[i].id);
+    }
     if (!mergeGeos(meshes, pgg::GeoKind::Mesh, out.mesh, err)) return false;
     if (!mergeGeos(anchors, pgg::GeoKind::Points, out.anchors, err)) return false;
     out.stats.rooms = ir.rooms.size();
