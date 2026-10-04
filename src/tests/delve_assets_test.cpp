@@ -189,6 +189,7 @@ TEST(DelveAssets, CodesParity) {
         {"DR", "open", 1, delve::door_code},
         {"DR", "gate", 2, delve::door_code},
         {"DT", "lamp", 1, delve::decor_code},
+        {"DT", "drain", 2, delve::decor_code},
         {"AK", "light", 1, delve::anchor_code},
         {"AK", "spawn", 2, delve::anchor_code},
         {"AK", "poi", 3, delve::anchor_code},

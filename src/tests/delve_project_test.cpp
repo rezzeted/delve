@@ -392,3 +392,44 @@ TEST(ProjectV1, FormatProv) {
     const delve::ProvChain single = {{"project", "", "0.6"}};
     EXPECT_EQ(delve::format_prov(single), "0.6 <- project");
 }
+
+TEST(ProjectV1, DecorRulesParse) {
+    const std::string base = fixture();
+    const std::string text =
+        surgery(base, "\"side_rules\": [",
+                "\"decor\": [{\"tag\": \"drain\", \"place\": \"floor\", "
+                "\"roles\": [\"hall\", \"crypt\"], \"chance\": 0.6}],\n    \"side_rules\": [");
+    delve::Project p;
+    std::string err;
+    ASSERT_TRUE(loadText(text, p, err)) << err;
+    ASSERT_EQ(p.fill.decor.size(), 1u);
+    EXPECT_EQ(p.fill.decor[0].tag, "drain");
+    EXPECT_EQ(p.fill.decor[0].place, "floor");
+    EXPECT_EQ(p.fill.decor[0].roles, (std::vector<std::string>{"hall", "crypt"}));
+    EXPECT_DOUBLE_EQ(p.fill.decor[0].chance, 0.6);
+    // No decor key at all -> empty rules, defaults intact.
+    EXPECT_TRUE(loadFixture().fill.decor.empty());
+}
+
+TEST(ProjectV1, DecorRulesReject) {
+    const std::string base = fixture();
+    const std::string anchor = "\"side_rules\": [";
+    const std::pair<const char*, const char*> probes[] = {
+        {"{\"tag\": \"lantern\"}", "tag"},                    // unknown decor tag
+        {"{\"tag\": \"lamp\"}", "lamp"},                      // lamp has its own keys
+        {"{\"tag\": \"drain\", \"place\": \"wall\"}", "place"},
+        {"{\"tag\": \"drain\", \"chance\": 1.5}", "chance"},
+        {"{\"tag\": \"drain\", \"roles\": [\"*\"]}", "roles"},
+        {"{\"tag\": \"drain\", \"roles\": [\"attic\"]}", "roles"},
+        {"{\"place\": \"floor\"}", "tag"},  // missing required tag
+    };
+    for (const auto& [rule, needle] : probes) {
+        delve::Project p;
+        std::string err;
+        EXPECT_FALSE(loadText(
+            surgery(base, anchor,
+                    std::string("\"decor\": [") + rule + "],\n    " + anchor),
+            p, err)) << rule;
+        EXPECT_NE(err.find(needle), std::string::npos) << rule << " -> " << err;
+    }
+}

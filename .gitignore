@@ -26,3 +26,6 @@ tools/delve_mcp/.venv/
 
 # Scratch space for local experiments
 tmp/
+
+# Локальные референсы iso-проекта (картинки для агента, не ассеты)
+projects/iso/refs_tmp/

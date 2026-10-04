@@ -55,6 +55,16 @@ struct SideRule {
     std::string style;
 };
 
+// F6 floor decor rule (v1, fill.decor): one decor:<tag> unit per matching
+// room with probability `chance`; roles empty = all rooms. place: "floor"
+// (the only mode for now).
+struct DecorRule {
+    std::string tag;                 // drain; "lamp" stays with lamp_step/lamp_place
+    std::string place = "floor";
+    std::vector<std::string> roles;  // empty = every room
+    double chance = 1.0;             // per-room probability, 0..1
+};
+
 struct FillParams {
     double cell = 2.0;
     double wall_t = 0.6;
@@ -69,6 +79,7 @@ struct FillParams {
     std::map<std::string, RoleEntry> roles;  // "*" default + named roles
     TransitionDefaults transitions;
     std::vector<SideRule> side_rules;  // applied in order, later wins
+    std::vector<DecorRule> decor;      // floor decor placement rules (v1)
 };
 
 struct Project {
@@ -152,7 +163,7 @@ int style_code(const std::string& name, bool& ok);  // stone=1 .. mortar=4 sands
 int role_code(const std::string& name, bool& ok);     // hall=1 corridor=2 crypt=3 entry=4 stairs=5
 int pattern_code(const std::string& name, bool& ok);  // butt=0 chase=1
 int door_code(const std::string& name, bool& ok);     // open=1 gate=2
-int decor_code(const std::string& name, bool& ok);    // lamp=1
+int decor_code(const std::string& name, bool& ok);    // lamp=1 drain=2
 int anchor_code(const std::string& name, bool& ok);   // light=1 spawn=2 poi=3
 
 }  // namespace delve

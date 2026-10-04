@@ -67,6 +67,11 @@ def DT_LAMP() -> (out: int) {
     out = 1
 }
 
+def DT_DRAIN() -> (out: int) {
+    """drain grate decor tag (codes.pgg)."""
+    out = 2
+}
+
 def AK_LIGHT() -> (out: int) {
     """light anchor (codes.pgg)."""
     out = 1

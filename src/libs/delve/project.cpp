@@ -241,7 +241,7 @@ bool load_project(const std::string& path, Project& out, std::string& err) {
             if (key != "cell" && key != "wall_t" && key != "min_passage" && key != "min_opening" &&
                 key != "room_h" && key != "door_h" && key != "frame" && key != "lamp_step" &&
                 key != "lamp_place" && key != "row_module" && key != "roles" &&
-                key != "transitions" && key != "side_rules") {
+                key != "transitions" && key != "side_rules" && key != "decor") {
                 err = path + ": fill." + key + ": unknown key";
                 return false;
             }
@@ -355,6 +355,72 @@ bool load_project(const std::string& path, Project& out, std::string& err) {
             if (fp.transitions.place != "corner" && fp.transitions.place != "wall") {
                 err = path + ": fill.transitions.place: expected corner|wall";
                 return false;
+            }
+        }
+        if (f.contains("decor")) {
+            const auto& rules = f["decor"];
+            if (!rules.is_array()) {
+                err = path + ": fill.decor: expected an array";
+                return false;
+            }
+            for (size_t i = 0; i < rules.size(); ++i) {
+                const std::string where = "fill.decor[" + std::to_string(i) + "]";
+                const auto& r = rules[i];
+                if (!r.is_object()) {
+                    err = path + ": " + where + ": expected an object";
+                    return false;
+                }
+                for (const auto& [key, _] : r.items()) {
+                    if (key != "tag" && key != "place" && key != "roles" && key != "chance") {
+                        err = path + ": " + where + "." + key + ": unknown key";
+                        return false;
+                    }
+                }
+                DecorRule rule;
+                if (!r.contains("tag") || !r["tag"].is_string()) {
+                    err = path + ": " + where + ".tag: expected a decor tag name";
+                    return false;
+                }
+                rule.tag = r["tag"].get<std::string>();
+                bool ok = false;
+                decor_code(rule.tag, ok);
+                if (!ok) {
+                    err = path + ": " + where + ".tag: unknown decor tag \"" + rule.tag + "\"";
+                    return false;
+                }
+                if (rule.tag == "lamp") {
+                    err = path + ": " + where +
+                          ".tag: \"lamp\" is placed via fill.lamp_step/lamp_place";
+                    return false;
+                }
+                if (!get_str(r, "place", rule.place, err, where) ||
+                    !get_num(r, "chance", rule.chance, err, where))
+                    return false;
+                if (rule.place != "floor") {
+                    err = path + ": " + where + ".place: expected floor";
+                    return false;
+                }
+                if (!(rule.chance >= 0.0 && rule.chance <= 1.0)) {
+                    err = path + ": " + where + ".chance: expected 0..1";
+                    return false;
+                }
+                if (r.contains("roles")) {
+                    const auto& rls = r["roles"];
+                    if (!rls.is_array()) {
+                        err = path + ": " + where + ".roles: expected an array";
+                        return false;
+                    }
+                    for (const auto& rn : rls) {
+                        if (!rn.is_string() || rn.get<std::string>() == "*" ||
+                            !is_role_name(rn.get<std::string>())) {
+                            err = path + ": " + where +
+                                  ".roles: unknown role (hall/corridor/crypt/entry/stairs)";
+                            return false;
+                        }
+                        rule.roles.push_back(rn.get<std::string>());
+                    }
+                }
+                fp.decor.push_back(std::move(rule));
             }
         }
         if (f.contains("side_rules")) {
@@ -709,6 +775,7 @@ int door_code(const std::string& name, bool& ok) {
 int decor_code(const std::string& name, bool& ok) {
     ok = true;
     if (name == "lamp") return 1;
+    if (name == "drain") return 2;
     ok = false;
     return 0;
 }

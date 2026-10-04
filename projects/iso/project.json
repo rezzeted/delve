@@ -58,6 +58,9 @@
       "stairs": {"style": "sandstone", "floor": "sandstone", "ceil": "none"}
     },
     "transitions": {"pattern": "chase", "width": 1.0, "place": "corner"},
+    "decor": [
+      {"tag": "drain", "place": "floor", "roles": ["hall", "crypt", "corridor"], "chance": 0.7}
+    ],
     "side_rules": [
       {"match": {"adjacent_role": "corridor"}, "style": "brick"},
       {"match": {"side": "outer"}, "style": "sandstone"}
@@ -69,7 +72,8 @@
     "facing": "walls/facing_v2.pgg",
     "node": "walls/node_v2.pgg",
     "door": "doors/opening_v2.pgg",
-    "decor:lamp": "decor/lamp_v2.pgg"
+    "decor:lamp": "decor/lamp_v2.pgg",
+    "decor:drain": "decor/drain_v2.pgg"
   },
   "asset_roots": ["assets"]
 }

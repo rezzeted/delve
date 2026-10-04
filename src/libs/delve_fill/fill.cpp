@@ -2,10 +2,12 @@
 
 #include "fill.h"
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <map>
 #include <numbers>
+#include <random>
 
 #include <glm/glm.hpp>
 
@@ -476,6 +478,78 @@ bool expandLamps(const IrRoom& r, const IrV2& ir, double cell, double step,
     return true;
 }
 
+// v1 decor rules (fill.decor), "floor" mode: one decor:<tag> unit per
+// matching room with probability rule.chance. The spot is rejection-sampled
+// from the room bbox with a 0.9 m wall inset and must keep a 0.6 m apron
+// fully inside a figured room's contour (doors start farther from corners,
+// so the apron also clears every doorway band). Deterministic per
+// (fill_seed, tag, room); a rolled-out or cramped room simply gets no unit.
+bool expandDecorFloor(const IrRoom& r, double cell, const DecorRule& rule,
+                      int fill_seed, const std::string& asset,
+                      std::vector<Unit>& units, std::string& err) {
+    if (!rule.roles.empty() &&
+        std::find(rule.roles.begin(), rule.roles.end(), r.role) == rule.roles.end())
+        return true;
+    const std::string base_id = "deco:" + rule.tag + ":" + r.id;
+    std::mt19937 rng(static_cast<unsigned>(unit_seed(fill_seed, base_id)));
+    std::uniform_real_distribution<double> u01(0.0, 1.0);
+    if (u01(rng) >= rule.chance) return true;  // rolled out
+    double x0 = 1e300, x1 = -1e300, z0 = 1e300, z1 = -1e300;
+    for (const auto& [gx, gy] : r.grid) {
+        x0 = std::min(x0, gx * cell);
+        x1 = std::max(x1, gx * cell);
+        z0 = std::min(z0, gy * cell);
+        z1 = std::max(z1, gy * cell);
+    }
+    const double inset = 0.9;
+    x0 += inset;
+    x1 -= inset;
+    z0 += inset;
+    z1 -= inset;
+    if (!(x0 < x1 && z0 < z1)) return true;  // room smaller than the apron
+    bool ok = false;
+    const int style = style_code(r.floor_style, ok);
+    if (!ok) {
+        err = "delve/run [room:" + r.id + "]: unknown style '" + r.floor_style + "'";
+        return false;
+    }
+    const int tag = decor_code(rule.tag, ok);
+    if (!ok) {
+        err = "delve/run: unknown decor tag '" + rule.tag + "'";
+        return false;
+    }
+    for (int attempt = 0; attempt < 16; ++attempt) {
+        const double lx = x0 + (x1 - x0) * u01(rng);
+        const double lz = z0 + (z1 - z0) * u01(rng);
+        const double apron = 0.6;
+        if (!pointInRoomGrid(r, cell, lx, lz) ||
+            !pointInRoomGrid(r, cell, lx + apron, lz) ||
+            !pointInRoomGrid(r, cell, lx - apron, lz) ||
+            !pointInRoomGrid(r, cell, lx, lz + apron) ||
+            !pointInRoomGrid(r, cell, lx, lz - apron))
+            continue;
+        Unit u;
+        u.id = base_id + ":0";
+        u.slot = "decor:" + rule.tag;
+        u.asset = asset;
+        PointsBuilder p;
+        p.pt(0, 0, 0);
+        p.vec3("n", 0, 1, 0);
+        pgg::GeoPtr pGeo = p.build(err);
+        if (!pGeo) return false;
+        u.bindings = {{"p", pgg::Value(pGeo)},
+                      {"style", pgg::Value(style)},
+                      {"tag", pgg::Value(tag)},
+                      {"rng_seed", pgg::Value(unit_seed(fill_seed, u.id))}};
+        u.tx = lx;
+        u.ty = 0;
+        u.tz = lz;
+        units.push_back(std::move(u));
+        return true;
+    }
+    return true;  // no valid spot in 16 tries: skip the decor
+}
+
 // --- run -------------------------------------------------------------------
 
 bool runUnit(const Unit& u, const std::vector<std::string>& roots, unsigned threads,
@@ -842,6 +916,8 @@ bool fill_level(const IrV2& ir, const Project& project, const FillOpts& opts, Fi
                                           {"node", ir.nodes.size()},
                                           {"door", ir.doors.size()},
                                           {"decor:lamp", ir.rooms.size()}};
+    for (const auto& rule : project.fill.decor)
+        if (!ir.rooms.empty()) need["decor:" + rule.tag] = ir.rooms.size();
     std::map<std::string, std::string> assets;  // slot -> resolved file
     for (const auto& [slot, n] : need) {
         if (n == 0) continue;
@@ -926,6 +1002,11 @@ bool fill_level(const IrV2& ir, const Project& project, const FillOpts& opts, Fi
                          project.fill.lamp_place, fseed, assets["decor:lamp"], units, err))
             return false;
     }
+    for (const auto& rule : project.fill.decor)
+        for (const auto& r : ir.rooms)
+            if (!expandDecorFloor(r, project.fill.cell, rule, fseed,
+                                  assets["decor:" + rule.tag], units, err))
+                return false;
 
     std::vector<pgg::GeoPtr> meshes, anchors;
     if (!assets.empty())
