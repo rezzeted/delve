@@ -371,7 +371,9 @@ bool load_project(const std::string& path, Project& out, std::string& err) {
                     return false;
                 }
                 for (const auto& [key, _] : r.items()) {
-                    if (key != "tag" && key != "place" && key != "roles" && key != "chance") {
+                    if (key != "tag" && key != "place" && key != "roles" && key != "chance" &&
+                        key != "count" && key != "min_dist" && key != "align" &&
+                        key != "radius") {
                         err = path + ": " + where + "." + key + ": unknown key";
                         return false;
                     }
@@ -394,14 +396,36 @@ bool load_project(const std::string& path, Project& out, std::string& err) {
                     return false;
                 }
                 if (!get_str(r, "place", rule.place, err, where) ||
-                    !get_num(r, "chance", rule.chance, err, where))
+                    !get_num(r, "chance", rule.chance, err, where) ||
+                    !get_num(r, "min_dist", rule.min_dist, err, where) ||
+                    !get_str(r, "align", rule.align, err, where) ||
+                    !get_num(r, "radius", rule.radius, err, where))
                     return false;
-                if (rule.place != "floor") {
-                    err = path + ": " + where + ".place: expected floor";
+                if (rule.place != "floor" && rule.place != "wall") {
+                    err = path + ": " + where + ".place: expected floor|wall";
                     return false;
                 }
                 if (!(rule.chance >= 0.0 && rule.chance <= 1.0)) {
                     err = path + ": " + where + ".chance: expected 0..1";
+                    return false;
+                }
+                if (r.contains("count")) {
+                    if (!r["count"].is_number_integer() || r["count"].get<int>() < 1) {
+                        err = path + ": " + where + ".count: expected an integer >= 1";
+                        return false;
+                    }
+                    rule.count = r["count"].get<int>();
+                }
+                if (!(rule.min_dist >= 0.0)) {
+                    err = path + ": " + where + ".min_dist: expected >= 0";
+                    return false;
+                }
+                if (rule.align != "any" && rule.align != "center" && rule.align != "near_door") {
+                    err = path + ": " + where + ".align: expected any|center|near_door";
+                    return false;
+                }
+                if (!(rule.radius > 0.0)) {
+                    err = path + ": " + where + ".radius: expected > 0";
                     return false;
                 }
                 if (r.contains("roles")) {
@@ -785,6 +809,7 @@ int anchor_code(const std::string& name, bool& ok) {
     if (name == "light") return 1;
     if (name == "spawn") return 2;
     if (name == "poi") return 3;
+    if (name == "blocker") return 4;
     ok = false;
     return 0;
 }

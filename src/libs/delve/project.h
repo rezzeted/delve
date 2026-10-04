@@ -55,14 +55,23 @@ struct SideRule {
     std::string style;
 };
 
-// F6 floor decor rule (v1, fill.decor): one decor:<tag> unit per matching
-// room with probability `chance`; roles empty = all rooms. place: "floor"
-// (the only mode for now).
+// F6 decor rule (v2, fill.decor): up to `count` decor:<tag> units per
+// matching room, each rolled against `chance`; roles empty = all rooms.
+// place: "floor" (rejection-sampled spots clearing the occupied registry) or
+// "wall" (sconce-style candidates along the facings). align steers floor
+// spots: "any" (uniform), "center" (bbox center first), "near_door" (an
+// rng-picked doorway first); both fall back to "any" sampling. radius is the
+// item footprint for the occupied registry, min_dist an extra clearance on
+// top of it. "lamp" as a tag stays with lamp_step/lamp_place.
 struct DecorRule {
-    std::string tag;                 // drain; "lamp" stays with lamp_step/lamp_place
-    std::string place = "floor";
-    std::vector<std::string> roles;  // empty = every room
-    double chance = 1.0;             // per-room probability, 0..1
+    std::string tag;
+    std::string place = "floor";       // floor | wall
+    std::vector<std::string> roles;    // empty = every room
+    double chance = 1.0;               // per-item probability, 0..1
+    int count = 1;                     // items attempted per matching room
+    double min_dist = 0.0;             // extra clearance vs occupied volumes
+    std::string align = "any";         // any | center | near_door (floor only)
+    double radius = 0.5;               // item footprint, meters
 };
 
 struct FillParams {
@@ -79,7 +88,7 @@ struct FillParams {
     std::map<std::string, RoleEntry> roles;  // "*" default + named roles
     TransitionDefaults transitions;
     std::vector<SideRule> side_rules;  // applied in order, later wins
-    std::vector<DecorRule> decor;      // floor decor placement rules (v1)
+    std::vector<DecorRule> decor;      // decor placement rules (v2)
 };
 
 struct Project {
@@ -164,6 +173,6 @@ int role_code(const std::string& name, bool& ok);     // hall=1 corridor=2 crypt
 int pattern_code(const std::string& name, bool& ok);  // butt=0 chase=1
 int door_code(const std::string& name, bool& ok);     // open=1 gate=2
 int decor_code(const std::string& name, bool& ok);    // lamp=1 drain=2
-int anchor_code(const std::string& name, bool& ok);   // light=1 spawn=2 poi=3
+int anchor_code(const std::string& name, bool& ok);   // light=1 spawn=2 poi=3 blocker=4
 
 }  // namespace delve

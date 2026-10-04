@@ -54,7 +54,10 @@ std::string find_pgg_lib_root(const std::string& delveAssets);
 // F6: expand the IR into units (slots §1 ids), run each unit's asset in its
 // local frame (R-A9) and assemble the world-frame level: meshes merged,
 // anchors merged with a per-point @label "<unit_id>#<kind>" (kind =
-// light|spawn|poi). Deterministic: units sorted, merge in order.
+// light|spawn|poi; blocker anchors kind=4 are stripped into
+// FillResult::occupied instead). C4 two-phase: room_fill units expand and run
+// first so floor decor expansion sees the occupied registry. Deterministic:
+// units sorted, merge in order.
 // opts.delve_assets is the delve asset library dir (codes/patterns + v1
 // assets); project asset_roots come first (R-A5). Returns false + err
 // (delve/slot or delve/run, F10 style) on any failure.
@@ -69,6 +72,14 @@ struct FillResult {
     pgg::GeoPtr mesh;
     pgg::GeoPtr anchors;
     FillStats stats;
+    // Occupied volumes reported by room_fill blocker anchors (@kind=4,
+    // stripped from the merged anchors; C4). World-frame XZ cylinders; decor
+    // rules keep clear of them and register their own placements here.
+    struct Occupied {
+        double x = 0, z = 0, r = 0;
+        std::string label;  // "<unit_id>#blocker" or the placed decor unit id
+    };
+    std::vector<Occupied> occupied;
     // Per-unit point spans in mesh/anchors (merge order; F11 attribution, F12).
     struct UnitSpan {
         std::string id, slot;

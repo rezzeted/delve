@@ -62,16 +62,33 @@
 
 ## Пакет C — richer decor
 
-### C4. Декор-правила v2
+### C4. Декор-правила v2 — сделано
 
 - Проблема: `fill.decor` v1 — один предмет на комнату, место случайное,
   без учёта занятого объёма (бочки в углах hall/crypt могут пересечься с
   предметом) и без настенных/потолочных правил.
-- Решение: поля `count`, `min_dist`, `align` (`any`/`center`/`near_door`),
-  `place: wall`; реестр занятых объёмов уровня (room_fill сообщает цилиндры
-  бочек — уже знает их позы), декор их избегает.
-- Файлы: `project.{h,cpp}`, `fill.cpp`, `fill_ra3.cpp` (выход room_fill),
-  `docs/project_v0.md`, `docs/fill_v1.md`.
+- Решение (в коде): поля `count` (≥ 1), `min_dist` (≥ 0), `align`
+  (`any`/`center`/`near_door`), `radius` (футпринт предмета), `place:
+  floor|wall`; дефолты = поведение v1 (iso/demo не менялись). Реестр занятых
+  объёмов: `room_fill` эмитит blocker-якоря (`@kind=4`, `@range` = радиус;
+  fill_v2 — по одному на бочку), сборка снимает их в `FillResult::occupied`
+  (в уровневые якоря не попадают — F11/экспорт неизменны). Заливка
+  двухфазная: room_fill прогоняется первым, напольный декор держит зазор
+  `o.r + radius + min_dist` от каждого цилиндра и регистрирует свои
+  размещения обратно (предметы одного правила не наезжают). `place: wall` —
+  кандидаты обходом фасадов как у бра, выбор без возврата.
+- Файлы: `project.{h,cpp}`, `fill.{h,cpp}` (splitBlockers, двухфазность,
+  expandDecorFloor v2 / expandDecorWall), `assets/codes.pgg` (AK_BLOCKER=4),
+  `assets/rooms/fill_v2.pgg` (blocker-якоря), тесты
+  (`OccupiedRegistryClearsDecor`, `DecorAlignCenter/NearDoor`,
+  `DecorWallPlace`, обновления parity/RA4), `docs/project_v0.md`,
+  `docs/fill_v1.md`, `docs/slots_v1.md`, `docs/assets_v1.md`.
+- Гейты: быстрые сьюты + smoke зелёные; `OccupiedRegistryClearsDecor` —
+  fill_v2 на frozen-уровне, drains не ближе порога к бочкам.
+- Живой замер iso: fill 32.7 с (без регресса к 32.4 с до C4),
+  `occupied=12` (блокеры бочек hall/crypt/vault + поставленные drains);
+  тёплый refill 1.0 с — реестр восстанавливается из F8-попаданий
+  идентично.
 
 ## Пакет D — честные вырезы
 

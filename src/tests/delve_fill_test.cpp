@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -661,6 +662,199 @@ TEST(DelveFill, AssetVariants) {
     // Wall-mounted torch: light anchor at the flame (cup end + above it).
     const glm::vec3 dp = (*anch->positions)[0] - glm::vec3(3.33f, 1.68f, 0.0f);
     EXPECT_LT(std::abs(dp.x) + std::abs(dp.y) + std::abs(dp.z), 1e-6f);
+}
+
+// --- C4: occupied registry + decor rules v2 ----------------------------------
+
+// AABB center of every placed decor:<tag> unit in world frame (the merged
+// mesh spans make placements observable).
+std::vector<std::array<double, 3>> decorCenters(const delve::FillResult& out,
+                                                const std::string& slot) {
+    std::vector<std::array<double, 3>> centers;
+    for (const auto& u : out.units) {
+        if (u.slot != slot || u.meshEnd == u.meshBegin) continue;
+        double x0 = 1e300, x1 = -1e300, y0 = 1e300, y1 = -1e300, z0 = 1e300, z1 = -1e300;
+        for (size_t i = u.meshBegin; i < u.meshEnd; ++i) {
+            const glm::vec3& q = (*out.mesh->positions)[i];
+            x0 = std::min(x0, (double)q.x);
+            x1 = std::max(x1, (double)q.x);
+            y0 = std::min(y0, (double)q.y);
+            y1 = std::max(y1, (double)q.y);
+            z0 = std::min(z0, (double)q.z);
+            z1 = std::max(z1, (double)q.z);
+        }
+        centers.push_back({(x0 + x1) * 0.5, (y0 + y1) * 0.5, (z0 + z1) * 0.5});
+    }
+    return centers;
+}
+
+// room_fill blocker anchors (fill_v2 barrels) land in FillResult::occupied,
+// are stripped from the merged anchors and push floor decor clear of them.
+TEST(DelveFill, OccupiedRegistryClearsDecor) {
+    const std::string base = readFile(std::string(DELVE_TEST_DATA) + "/d1_project.json");
+    delve::Project p;
+    std::string err;
+    ASSERT_TRUE(loadText(surgery(base, "\"side_rules\": [",
+                                 "\"decor\": [{\"tag\": \"drain\", \"count\": 2, "
+                                 "\"min_dist\": 0.4, \"radius\": 0.45}],\n    "
+                                 "\"side_rules\": ["),
+                         p, err))
+        << err;
+    p.dir = std::filesystem::path(DELVE_ASSETS_DIR).parent_path().string();
+    p.asset_roots = {"assets"};
+    p.slots["room_fill"] = "rooms/fill_v2.pgg";
+    p.slots["decor:drain"] = "decor/drain_v2.pgg";
+    const delve::IrV2 ir = buildD1Ir(p);
+    delve::FillOpts opts;
+    opts.delve_assets = DELVE_ASSETS_DIR;
+    delve::FillResult out;
+    ASSERT_TRUE(delve::fill_level(ir, p, opts, out, err)) << err;
+
+    // Every frozen-level room is a hall with 1-3 barrels: >= 1 blocker each.
+    ASSERT_GE(out.occupied.size(), ir.rooms.size());
+    for (const auto& o : out.occupied) {
+        EXPECT_GT(o.r, 0.3);
+        EXPECT_FALSE(o.label.empty());
+    }
+    // Blockers never reach the merged anchors: the v1 count formula holds.
+    size_t halls = 0;
+    for (const auto& r : ir.rooms)
+        if (r.role == "hall") ++halls;
+    EXPECT_EQ(out.anchors->pointCount(), ir.rooms.size() + halls + out.stats.lamps);
+
+    // Drain AABB centers sit within ~0.35 m of the placement, so the true
+    // clearance o.r + 0.45 + 0.4 is conservatively floored at o.r + 0.5.
+    const auto drains = decorCenters(out, "decor:drain");
+    ASSERT_FALSE(drains.empty());
+    for (const auto& c : drains) {
+        for (const auto& o : out.occupied) {
+            if (o.label.rfind("room:", 0) != 0) continue;  // blockers only
+            EXPECT_GT(std::hypot(c[0] - o.x, c[2] - o.z), o.r + 0.5)
+                << "drain at (" << c[0] << ", " << c[2] << ") vs " << o.label;
+        }
+    }
+    // Same-room drains clear each other (radius 0.45 twice + min_dist).
+    // Rooms are >= 4 m apart in the frozen level, so the 3.0 m vicinity
+    // filter leaves only same-room pairs.
+    for (size_t i = 0; i < drains.size(); ++i)
+        for (size_t j = i + 1; j < drains.size(); ++j) {
+            const double d =
+                std::hypot(drains[i][0] - drains[j][0], drains[i][2] - drains[j][2]);
+            if (d < 3.0) EXPECT_GT(d, 0.9);
+        }
+}
+
+// Decor align modes on a synthetic one-room IR (6x6 m at cell 2.0, bbox
+// center (3, 3)): "center" lands on the bbox center, "near_door" lands at
+// the first inward step off the doorway, place:"wall" picks sconce
+// candidates on the facing. A 0.1 m probe box makes placements observable.
+delve::IrV2 oneRoomIr() {
+    delve::IrV2 ir;
+    delve::IrRoom room;
+    room.id = "1";
+    room.role = "hall";
+    room.grid = {{0, 0}, {3, 0}, {3, 3}, {0, 3}};
+    room.h = 3.0;
+    room.style = "stone";
+    room.floor_style = "stone";
+    room.ceil_style = "none";
+    ir.rooms = {room};
+    return ir;
+}
+
+delve::Project loadDotProject(const std::string& ruleJson) {
+    const std::string base = readFile(std::string(DELVE_TEST_DATA) + "/d1_project.json");
+    delve::Project p;
+    std::string err;
+    EXPECT_TRUE(loadText(surgery(base, "\"side_rules\": [",
+                                 "\"decor\": [" + ruleJson + "],\n    \"side_rules\": ["),
+                         p, err))
+        << err;
+    p.dir = std::filesystem::path(DELVE_ASSETS_DIR).parent_path().string();
+    p.asset_roots = {"src/tests/data/fill", "assets"};
+    p.slots["room_fill"] = "empty_room_fill.pgg";
+    p.slots["wall_body"] = "empty_wall_body.pgg";
+    p.slots["facing"] = "empty_facing.pgg";
+    p.slots["node"] = "empty_node.pgg";
+    p.slots["door"] = "empty_door.pgg";
+    p.slots["decor:lamp"] = "empty_decor.pgg";
+    p.slots["decor:drain"] = "dot_decor.pgg";
+    return p;
+}
+
+delve::FillResult fillOneRoom(const delve::IrV2& ir, const delve::Project& p) {
+    delve::FillOpts opts;
+    opts.delve_assets = DELVE_ASSETS_DIR;
+    delve::FillResult out;
+    std::string err;
+    EXPECT_TRUE(delve::fill_level(ir, p, opts, out, err)) << err;
+    return out;
+}
+
+TEST(DelveFill, DecorAlignCenter) {
+    const delve::IrV2 ir = oneRoomIr();
+    const delve::FillResult out =
+        fillOneRoom(ir, loadDotProject("{\"tag\": \"drain\", \"align\": \"center\"}"));
+    const auto centers = decorCenters(out, "decor:drain");
+    ASSERT_EQ(centers.size(), 1u);
+    EXPECT_NEAR(centers[0][0], 3.0, 0.06);
+    EXPECT_NEAR(centers[0][1], 0.0, 0.06);
+    EXPECT_NEAR(centers[0][2], 3.0, 0.06);
+}
+
+TEST(DelveFill, DecorAlignNearDoor) {
+    delve::IrV2 ir = oneRoomIr();
+    delve::IrDoor d;
+    d.id = "door:1-2";
+    d.room_a = "1";
+    d.room_b = "2";
+    d.wall = "wall:1:0";
+    d.g0 = {1, 0};
+    d.g1 = {2, 0};
+    d.from = {2.5, 0.0};
+    d.to = {3.5, 0.0};
+    d.clear = 1.0;
+    d.h = 2.2;
+    d.frame = 0.15;
+    d.thick = 0.6;
+    ir.doors = {d};
+    const delve::FillResult out =
+        fillOneRoom(ir, loadDotProject("{\"tag\": \"drain\", \"align\": \"near_door\"}"));
+    const auto centers = decorCenters(out, "decor:drain");
+    ASSERT_EQ(centers.size(), 1u);
+    // Doorway mid (3, 0), inward +z toward the bbox center, first step 1.0 m.
+    EXPECT_NEAR(centers[0][0], 3.0, 0.06);
+    EXPECT_NEAR(centers[0][2], 1.0, 0.06);
+}
+
+TEST(DelveFill, DecorWallPlace) {
+    delve::IrV2 ir = oneRoomIr();
+    delve::IrFacing f;
+    f.id = "fac:1:0";
+    f.wall = "wall:1:0";
+    f.room = "1";
+    f.style = "stone";
+    f.from = {0.0, 0.0};
+    f.to = {6.0, 0.0};
+    f.n = {0.0, 1.0};
+    f.h = 3.0;
+    f.s0 = 0.0;
+    f.s1 = 6.0;
+    ir.facings = {f};
+    const delve::FillResult out =
+        fillOneRoom(ir, loadDotProject("{\"tag\": \"drain\", \"place\": \"wall\", "
+                                       "\"count\": 2}"));
+    const auto centers = decorCenters(out, "decor:drain");
+    ASSERT_EQ(centers.size(), 2u);
+    // Sconce candidates: y = min(1.9, h - 0.5), 0.08 m off the wall face,
+    // x among the 0.5..5.5 m candidate spots, two distinct picks.
+    for (const auto& c : centers) {
+        EXPECT_NEAR(c[1], 1.9, 0.06);
+        EXPECT_NEAR(c[2], 0.08, 0.06);
+        EXPECT_GT(c[0], 0.5 - 0.06);
+        EXPECT_LT(c[0], 5.5 + 0.06);
+    }
+    EXPECT_GT(std::abs(centers[0][0] - centers[1][0]), 0.5);
 }
 
 TEST(DelveFill, FillRejects) {

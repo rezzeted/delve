@@ -398,15 +398,29 @@ TEST(ProjectV1, DecorRulesParse) {
     const std::string text =
         surgery(base, "\"side_rules\": [",
                 "\"decor\": [{\"tag\": \"drain\", \"place\": \"floor\", "
-                "\"roles\": [\"hall\", \"crypt\"], \"chance\": 0.6}],\n    \"side_rules\": [");
+                "\"roles\": [\"hall\", \"crypt\"], \"chance\": 0.6}, "
+                "{\"tag\": \"drain\", \"place\": \"wall\", \"count\": 3, "
+                "\"min_dist\": 0.4, \"align\": \"near_door\", \"radius\": 0.35}],\n    "
+                "\"side_rules\": [");
     delve::Project p;
     std::string err;
     ASSERT_TRUE(loadText(text, p, err)) << err;
-    ASSERT_EQ(p.fill.decor.size(), 1u);
+    ASSERT_EQ(p.fill.decor.size(), 2u);
     EXPECT_EQ(p.fill.decor[0].tag, "drain");
     EXPECT_EQ(p.fill.decor[0].place, "floor");
     EXPECT_EQ(p.fill.decor[0].roles, (std::vector<std::string>{"hall", "crypt"}));
     EXPECT_DOUBLE_EQ(p.fill.decor[0].chance, 0.6);
+    // v2 defaults keep the v1 behavior.
+    EXPECT_EQ(p.fill.decor[0].count, 1);
+    EXPECT_DOUBLE_EQ(p.fill.decor[0].min_dist, 0.0);
+    EXPECT_EQ(p.fill.decor[0].align, "any");
+    EXPECT_DOUBLE_EQ(p.fill.decor[0].radius, 0.5);
+    // v2 fields parse.
+    EXPECT_EQ(p.fill.decor[1].place, "wall");
+    EXPECT_EQ(p.fill.decor[1].count, 3);
+    EXPECT_DOUBLE_EQ(p.fill.decor[1].min_dist, 0.4);
+    EXPECT_EQ(p.fill.decor[1].align, "near_door");
+    EXPECT_DOUBLE_EQ(p.fill.decor[1].radius, 0.35);
     // No decor key at all -> empty rules, defaults intact.
     EXPECT_TRUE(loadFixture().fill.decor.empty());
 }
@@ -417,11 +431,17 @@ TEST(ProjectV1, DecorRulesReject) {
     const std::pair<const char*, const char*> probes[] = {
         {"{\"tag\": \"lantern\"}", "tag"},                    // unknown decor tag
         {"{\"tag\": \"lamp\"}", "lamp"},                      // lamp has its own keys
-        {"{\"tag\": \"drain\", \"place\": \"wall\"}", "place"},
+        {"{\"tag\": \"drain\", \"place\": \"ceiling\"}", "place"},
         {"{\"tag\": \"drain\", \"chance\": 1.5}", "chance"},
         {"{\"tag\": \"drain\", \"roles\": [\"*\"]}", "roles"},
         {"{\"tag\": \"drain\", \"roles\": [\"attic\"]}", "roles"},
         {"{\"place\": \"floor\"}", "tag"},  // missing required tag
+        {"{\"tag\": \"drain\", \"count\": 0}", "count"},
+        {"{\"tag\": \"drain\", \"count\": 1.5}", "count"},
+        {"{\"tag\": \"drain\", \"min_dist\": -0.1}", "min_dist"},
+        {"{\"tag\": \"drain\", \"align\": \"diagonal\"}", "align"},
+        {"{\"tag\": \"drain\", \"radius\": 0}", "radius"},
+        {"{\"tag\": \"drain\", \"bogus\": 1}", "unknown key"},
     };
     for (const auto& [rule, needle] : probes) {
         delve::Project p;

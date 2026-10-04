@@ -87,6 +87,11 @@ def AK_POI() -> (out: int) {
     out = 3
 }
 
+def AK_BLOCKER() -> (out: int) {
+    """occupied-volume blocker anchor (codes.pgg)."""
+    out = 4
+}
+
 def ZP_BUTT() -> (out: int) {
     """butt joint pattern (codes.pgg)."""
     out = 0

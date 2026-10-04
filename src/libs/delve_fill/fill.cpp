@@ -478,34 +478,38 @@ bool expandLamps(const IrRoom& r, const IrV2& ir, double cell, double step,
     return true;
 }
 
-// v1 decor rules (fill.decor), "floor" mode: one decor:<tag> unit per
-// matching room with probability rule.chance. The spot is rejection-sampled
-// from the room bbox with a 0.9 m wall inset and must keep a 0.6 m apron
-// fully inside a figured room's contour (doors start farther from corners,
-// so the apron also clears every doorway band). Deterministic per
-// (fill_seed, tag, room); a rolled-out or cramped room simply gets no unit.
-bool expandDecorFloor(const IrRoom& r, double cell, const DecorRule& rule,
+// v2 decor rules (fill.decor), "floor" mode: up to rule.count decor:<tag>
+// units per matching room, each rolled against rule.chance. Spots are
+// rejection-sampled from the room bbox with a 0.9 m wall inset and must keep
+// a 0.6 m apron fully inside a figured room's contour (doors start farther
+// from corners, so the apron also clears every doorway band), plus clear
+// every occupied volume (C4: room_fill blockers and this rule's own
+// placements) by o.r + rule.radius + rule.min_dist. align steers the first
+// tries: "center" probes the bbox center, "near_door" probes doorways of the
+// room (rng-rotated order) stepping toward the bbox center; both fall back
+// to uniform sampling. Deterministic per (fill_seed, tag, room); a cramped
+// room simply gets fewer units.
+bool expandDecorFloor(const IrRoom& r, const IrV2& ir, double cell, const DecorRule& rule,
                       int fill_seed, const std::string& asset,
-                      std::vector<Unit>& units, std::string& err) {
+                      std::vector<FillResult::Occupied>& occupied, std::vector<Unit>& units,
+                      std::string& err) {
     if (!rule.roles.empty() &&
         std::find(rule.roles.begin(), rule.roles.end(), r.role) == rule.roles.end())
         return true;
     const std::string base_id = "deco:" + rule.tag + ":" + r.id;
     std::mt19937 rng(static_cast<unsigned>(unit_seed(fill_seed, base_id)));
     std::uniform_real_distribution<double> u01(0.0, 1.0);
-    if (u01(rng) >= rule.chance) return true;  // rolled out
-    double x0 = 1e300, x1 = -1e300, z0 = 1e300, z1 = -1e300;
+    double bx0 = 1e300, bx1 = -1e300, bz0 = 1e300, bz1 = -1e300;
     for (const auto& [gx, gy] : r.grid) {
-        x0 = std::min(x0, gx * cell);
-        x1 = std::max(x1, gx * cell);
-        z0 = std::min(z0, gy * cell);
-        z1 = std::max(z1, gy * cell);
+        bx0 = std::min(bx0, gx * cell);
+        bx1 = std::max(bx1, gx * cell);
+        bz0 = std::min(bz0, gy * cell);
+        bz1 = std::max(bz1, gy * cell);
     }
+    const double cx = (bx0 + bx1) * 0.5, cz = (bz0 + bz1) * 0.5;
     const double inset = 0.9;
-    x0 += inset;
-    x1 -= inset;
-    z0 += inset;
-    z1 -= inset;
+    const double x0 = bx0 + inset, x1 = bx1 - inset;
+    const double z0 = bz0 + inset, z1 = bz1 - inset;
     if (!(x0 < x1 && z0 < z1)) return true;  // room smaller than the apron
     bool ok = false;
     const int style = style_code(r.floor_style, ok);
@@ -518,18 +522,66 @@ bool expandDecorFloor(const IrRoom& r, double cell, const DecorRule& rule,
         err = "delve/run: unknown decor tag '" + rule.tag + "'";
         return false;
     }
-    for (int attempt = 0; attempt < 16; ++attempt) {
-        const double lx = x0 + (x1 - x0) * u01(rng);
-        const double lz = z0 + (z1 - z0) * u01(rng);
-        const double apron = 0.6;
-        if (!pointInRoomGrid(r, cell, lx, lz) ||
-            !pointInRoomGrid(r, cell, lx + apron, lz) ||
-            !pointInRoomGrid(r, cell, lx - apron, lz) ||
-            !pointInRoomGrid(r, cell, lx, lz + apron) ||
-            !pointInRoomGrid(r, cell, lx, lz - apron))
-            continue;
+    const double apron = 0.6;
+    auto spotOk = [&](double x, double z) {
+        if (!pointInRoomGrid(r, cell, x, z) ||
+            !pointInRoomGrid(r, cell, x + apron, z) ||
+            !pointInRoomGrid(r, cell, x - apron, z) ||
+            !pointInRoomGrid(r, cell, x, z + apron) ||
+            !pointInRoomGrid(r, cell, x, z - apron))
+            return false;
+        for (const auto& o : occupied) {
+            const double dx = x - o.x, dz = z - o.z;
+            if (std::hypot(dx, dz) < o.r + rule.radius + rule.min_dist) return false;
+        }
+        return true;
+    };
+    // Doorways of this room (align == "near_door").
+    std::vector<const IrDoor*> roomDoors;
+    if (rule.align == "near_door")
+        for (const auto& d : ir.doors)
+            if (d.room_a == r.id || d.room_b == r.id) roomDoors.push_back(&d);
+    for (int k = 0; k < rule.count; ++k) {
+        if (u01(rng) >= rule.chance) continue;  // per-item roll
+        double lx = 0, lz = 0;
+        bool found = false;
+        if (rule.align == "center" && spotOk(cx, cz)) {
+            lx = cx;
+            lz = cz;
+            found = true;
+        }
+        if (!found && rule.align == "near_door" && !roomDoors.empty()) {
+            const size_t start =
+                (size_t)(u01(rng) * (double)roomDoors.size()) % roomDoors.size();
+            for (size_t i = 0; i < roomDoors.size() && !found; ++i) {
+                const IrDoor* d = roomDoors[(start + i) % roomDoors.size()];
+                const double mx = (d->from.first + d->to.first) * 0.5;
+                const double mz = (d->from.second + d->to.second) * 0.5;
+                double vx = cx - mx, vz = cz - mz;
+                const double vl = std::hypot(vx, vz);
+                if (vl < kEps) continue;
+                vx /= vl;
+                vz /= vl;
+                for (double off = 1.0; off <= 2.5 && !found; off += 0.5)
+                    if (spotOk(mx + vx * off, mz + vz * off)) {
+                        lx = mx + vx * off;
+                        lz = mz + vz * off;
+                        found = true;
+                    }
+            }
+        }
+        for (int attempt = 0; attempt < 16 && !found; ++attempt) {
+            const double x = x0 + (x1 - x0) * u01(rng);
+            const double z = z0 + (z1 - z0) * u01(rng);
+            if (spotOk(x, z)) {
+                lx = x;
+                lz = z;
+                found = true;
+            }
+        }
+        if (!found) continue;  // cramped room: fewer units
         Unit u;
-        u.id = base_id + ":0";
+        u.id = base_id + ":" + std::to_string(k);
         u.slot = "decor:" + rule.tag;
         u.asset = asset;
         PointsBuilder p;
@@ -544,10 +596,105 @@ bool expandDecorFloor(const IrRoom& r, double cell, const DecorRule& rule,
         u.tx = lx;
         u.ty = 0;
         u.tz = lz;
+        const std::string uid = u.id;
         units.push_back(std::move(u));
-        return true;
+        // The item's footprint joins the registry: later items keep clear.
+        occupied.push_back({lx, lz, rule.radius, uid});
     }
-    return true;  // no valid spot in 16 tries: skip the decor
+    return true;
+}
+
+// v2 decor rules, "wall" mode: sconce-style candidates along the room's
+// facings (the expandLampsWall walk: 0.5 m end inset, 0.4 m door-cut
+// clearance, y = min(1.9, h - 0.5), mount point 0.08 m off the wall face,
+// @n = inward horizontal normal; candidate spacing = max(2*radius, 0.6) m).
+// Up to rule.count picks per room, each rolled against rule.chance, drawn
+// without replacement in a deterministic rng order (Fisher-Yates over the
+// candidate list). Style = the room's wall style.
+bool expandDecorWall(const IrRoom& r, const IrV2& ir, const DecorRule& rule, int fill_seed,
+                     const std::string& asset, std::vector<Unit>& units, std::string& err) {
+    if (!rule.roles.empty() &&
+        std::find(rule.roles.begin(), rule.roles.end(), r.role) == rule.roles.end())
+        return true;
+    bool ok = false;
+    const int style = style_code(r.style, ok);
+    if (!ok) {
+        err = "delve/run [room:" + r.id + "]: unknown style '" + r.style + "'";
+        return false;
+    }
+    const int tag = decor_code(rule.tag, ok);
+    if (!ok) {
+        err = "delve/run: unknown decor tag '" + rule.tag + "'";
+        return false;
+    }
+    struct Cand {
+        double x, y, z, nx, nz;
+    };
+    std::vector<Cand> cands;
+    const double y = std::min(1.9, r.h - 0.5);
+    const double step = std::max(2.0 * rule.radius, 0.6);
+    for (const auto& f : ir.facings) {
+        if (f.room != r.id) continue;
+        const double dx = f.to.first - f.from.first, dz = f.to.second - f.from.second;
+        const double len = std::hypot(dx, dz);
+        if (!(len > 1.0)) continue;  // corner sliver: no mount
+        const double ux = dx / len, uz = dz / len;
+        const double inset = 0.5;
+        const double usable = len - 2 * inset;
+        const int cnt = std::max(1, (int)std::floor(usable / step) + 1);
+        for (int i = 0; i < cnt; ++i) {
+            const double s = inset + usable * (i + 0.5) / cnt;
+            bool blocked = false;
+            for (const auto& c : f.cuts) {
+                const double ca =
+                    (c.a.first - f.from.first) * ux + (c.a.second - f.from.second) * uz;
+                const double cb =
+                    (c.b.first - f.from.first) * ux + (c.b.second - f.from.second) * uz;
+                if (s > std::min(ca, cb) - 0.4 && s < std::max(ca, cb) + 0.4) {
+                    blocked = true;
+                    break;
+                }
+            }
+            if (blocked) continue;
+            cands.push_back({f.from.first + ux * s + f.n.first * 0.08, y,
+                             f.from.second + uz * s + f.n.second * 0.08, f.n.first,
+                             f.n.second});
+        }
+    }
+    if (cands.empty()) return true;
+    const std::string base_id = "deco:" + rule.tag + ":" + r.id;
+    std::mt19937 rng(static_cast<unsigned>(unit_seed(fill_seed, base_id)));
+    std::uniform_real_distribution<double> u01(0.0, 1.0);
+    std::vector<size_t> order(cands.size());
+    for (size_t i = 0; i < order.size(); ++i) order[i] = i;
+    for (size_t i = order.size() - 1; i > 0; --i) {
+        const size_t j = (size_t)(u01(rng) * (double)(i + 1)) % (i + 1);
+        std::swap(order[i], order[j]);
+    }
+    int placed = 0;
+    for (size_t oi = 0; oi < order.size() && placed < rule.count; ++oi) {
+        if (u01(rng) >= rule.chance) continue;  // per-item roll
+        const Cand& cnd = cands[order[oi]];
+        Unit u;
+        u.id = base_id + ":" + std::to_string(placed);
+        u.slot = "decor:" + rule.tag;
+        u.asset = asset;
+        PointsBuilder p;
+        p.pt(0, 0, 0);
+        p.vec3("n", cnd.nx, 0, cnd.nz);
+        pgg::GeoPtr pGeo = p.build(err);
+        if (!pGeo) return false;
+        u.bindings = {{"p", pgg::Value(pGeo)},
+                      {"style", pgg::Value(style)},
+                      {"tag", pgg::Value(tag)},
+                      {"rng_seed", pgg::Value(unit_seed(fill_seed, u.id))}};
+        u.tx = cnd.x;
+        u.ty = cnd.y;
+        u.tz = cnd.z;
+        units.push_back(std::move(u));
+        ++placed;
+    }
+    return true;
 }
 
 // --- run -------------------------------------------------------------------
@@ -851,6 +998,71 @@ bool mergeGeos(const std::vector<pgg::GeoPtr>& parts, pgg::GeoKind kind, pgg::Ge
 
 // --- labels ----------------------------------------------------------------
 
+// C4: room_fill reports occupied volumes as anchor points with @kind=4
+// (blocker) and @range = cylinder radius. They never reach the merged
+// anchors: split here (world frame, after rigidGeo) into the occupancy
+// registry the decor rules consult, returning the anchors without them.
+pgg::GeoPtr splitBlockers(const pgg::GeoPtr& g, const std::string& unit,
+                          std::vector<FillResult::Occupied>& out, std::string& err) {
+    if (g->pointCount() == 0) return g;
+    const pgg::AttrColumn* kind = g->pointAttrs ? g->pointAttrs->find("kind") : nullptr;
+    const auto* kinds =
+        kind ? std::get_if<std::shared_ptr<const std::vector<int64_t>>>(&kind->data) : nullptr;
+    if (!kinds) {
+        err = "delve/run [" + unit + "]: anchors without an int @kind column";
+        return {};
+    }
+    size_t blocked = 0;
+    for (int64_t k : **kinds)
+        if (k == 4) ++blocked;
+    if (blocked == 0) return g;
+    const pgg::AttrColumn* range = g->pointAttrs->find("range");
+    const auto* ranges =
+        range ? std::get_if<std::shared_ptr<const std::vector<float>>>(&range->data) : nullptr;
+    std::vector<size_t> keep;
+    keep.reserve(g->pointCount() - blocked);
+    for (size_t i = 0; i < g->pointCount(); ++i) {
+        if ((**kinds)[i] == 4) {
+            FillResult::Occupied o;
+            o.x = (*g->positions)[i].x;
+            o.z = (*g->positions)[i].z;
+            o.r = ranges ? (double)(**ranges)[i] : 0.4;
+            o.label = unit + "#blocker";
+            out.push_back(std::move(o));
+        } else {
+            keep.push_back(i);
+        }
+    }
+    auto pos = std::make_shared<std::vector<glm::vec3>>();
+    pos->reserve(keep.size());
+    for (size_t i : keep) pos->push_back((*g->positions)[i]);
+    auto attrs = std::make_shared<pgg::AttrSet>();
+    for (const auto& [name, col] : g->pointAttrs->columns) {
+        pgg::AttrColumn c;
+        c.typeInfo = col.typeInfo;
+        c.data = std::visit(
+            [&](const auto& src) -> pgg::ColumnData {
+                using Col = std::decay_t<decltype(*src)>;
+                auto nv = std::make_shared<Col>();
+                nv->reserve(keep.size());
+                for (size_t i : keep) nv->push_back((*src)[i]);
+                return nv;
+            },
+            col.data);
+        attrs->columns[name] = std::move(c);
+    }
+    auto rest = std::make_shared<pgg::Geo>(*g);
+    rest->positions = std::move(pos);
+    rest->pointAttrs = std::move(attrs);
+    if (rest->normals && rest->normals->size() == g->pointCount()) {
+        auto nv = std::make_shared<std::vector<glm::vec3>>();
+        nv->reserve(keep.size());
+        for (size_t i : keep) nv->push_back((*g->normals)[i]);
+        rest->normals = std::move(nv);
+    }
+    return rest;
+}
+
 pgg::GeoPtr labelAnchors(const pgg::GeoPtr& g, const std::string& unit, std::string& err) {
     if (g->pointCount() == 0) return g;
     const pgg::AttrColumn* kind = g->pointAttrs ? g->pointAttrs->find("kind") : nullptr;
@@ -972,6 +1184,67 @@ bool fill_level(const IrV2& ir, const Project& project, const FillOpts& opts, Fi
             return false;
         units.push_back(std::move(u));
     }
+
+    std::vector<pgg::GeoPtr> meshes, anchors;
+    if (!assets.empty())
+        pgg::appendImportRoot(roots, pgg::findProductLibRoot(assets.begin()->second));
+    size_t meshOff = 0, anchorsOff = 0;
+    // One unit through the F8 cache / PGG run, rigid placement and anchor
+    // labeling; appends the span and the merge inputs. room_fill blocker
+    // anchors (kind=4) split into out.occupied first (C4) — cache hits
+    // included, so the registry is complete on a warm refill too.
+    auto processUnit = [&](const Unit& u) -> bool {
+        pgg::GeoPtr mesh, anch;
+        uint64_t unitKeyH = 0;
+        if (opts.cache) {
+            UnitKey key;
+            if (!unit_key(u.slot, assetKeys[u.slot], u.bindings, key, err)) return false;
+            unitKeyH = key.h;
+            UnitCache::Entry e;
+            if (opts.cache->lookup(key, e)) {
+                mesh = e.mesh;
+                anch = e.anchors;
+                out.stats.reused.push_back(u.id);
+            } else {
+                if (!runUnit(u, roots, opts.threads, mesh, anch, err)) return false;
+                opts.cache->store(key, mesh, anch);
+                out.stats.reran.push_back(u.id);
+            }
+        } else {
+            if (!runUnit(u, roots, opts.threads, mesh, anch, err)) return false;
+        }
+        mesh = rigidGeo(mesh, u.yawDeg, u.tx, u.ty, u.tz, u.id, err);
+        if (!mesh) return false;
+        anch = rigidGeo(anch, u.yawDeg, u.tx, u.ty, u.tz, u.id, err);
+        if (!anch) return false;
+        if (u.slot == "room_fill") {
+            anch = splitBlockers(anch, u.id, out.occupied, err);
+            if (!anch) return false;
+        }
+        anch = labelAnchors(anch, u.id, err);
+        if (!anch) return false;
+        FillResult::UnitSpan span;
+        span.id = u.id;
+        span.slot = u.slot;
+        span.meshBegin = meshOff;
+        span.meshEnd = meshOff + mesh->pointCount();
+        span.anchorsBegin = anchorsOff;
+        span.anchorsEnd = anchorsOff + anch->pointCount();
+        span.cacheKey = unitKeyH;
+        meshOff = span.meshEnd;
+        anchorsOff = span.anchorsEnd;
+        out.units.push_back(std::move(span));
+        meshes.push_back(std::move(mesh));
+        anchors.push_back(std::move(anch));
+        return true;
+    };
+
+    // C4 phase 1: room fills run before any decor expansion, so floor decor
+    // picks spots with a complete occupied registry.
+    size_t done = 0;
+    for (; done < units.size(); ++done)
+        if (!processUnit(units[done])) return false;
+
     for (const auto& w : ir.walls) {
         Unit u;
         if (!expandBody(w, ir, project.fill.cell, fseed, assets["wall_body"], doors, u,
@@ -1003,55 +1276,19 @@ bool fill_level(const IrV2& ir, const Project& project, const FillOpts& opts, Fi
             return false;
     }
     for (const auto& rule : project.fill.decor)
-        for (const auto& r : ir.rooms)
-            if (!expandDecorFloor(r, project.fill.cell, rule, fseed,
-                                  assets["decor:" + rule.tag], units, err))
+        for (const auto& r : ir.rooms) {
+            const std::string& asset = assets["decor:" + rule.tag];
+            if (rule.place == "wall") {
+                if (!expandDecorWall(r, ir, rule, fseed, asset, units, err)) return false;
+            } else if (!expandDecorFloor(r, ir, project.fill.cell, rule, fseed, asset,
+                                         out.occupied, units, err)) {
                 return false;
-
-    std::vector<pgg::GeoPtr> meshes, anchors;
-    if (!assets.empty())
-        pgg::appendImportRoot(roots, pgg::findProductLibRoot(assets.begin()->second));
-    size_t meshOff = 0, anchorsOff = 0;
-    for (const auto& u : units) {
-        pgg::GeoPtr mesh, anch;
-        uint64_t unitKeyH = 0;
-        if (opts.cache) {
-            UnitKey key;
-            if (!unit_key(u.slot, assetKeys[u.slot], u.bindings, key, err)) return false;
-            unitKeyH = key.h;
-            UnitCache::Entry e;
-            if (opts.cache->lookup(key, e)) {
-                mesh = e.mesh;
-                anch = e.anchors;
-                out.stats.reused.push_back(u.id);
-            } else {
-                if (!runUnit(u, roots, opts.threads, mesh, anch, err)) return false;
-                opts.cache->store(key, mesh, anch);
-                out.stats.reran.push_back(u.id);
             }
-        } else {
-            if (!runUnit(u, roots, opts.threads, mesh, anch, err)) return false;
         }
-        mesh = rigidGeo(mesh, u.yawDeg, u.tx, u.ty, u.tz, u.id, err);
-        if (!mesh) return false;
-        anch = rigidGeo(anch, u.yawDeg, u.tx, u.ty, u.tz, u.id, err);
-        if (!anch) return false;
-        anch = labelAnchors(anch, u.id, err);
-        if (!anch) return false;
-        FillResult::UnitSpan span;
-        span.id = u.id;
-        span.slot = u.slot;
-        span.meshBegin = meshOff;
-        span.meshEnd = meshOff + mesh->pointCount();
-        span.anchorsBegin = anchorsOff;
-        span.anchorsEnd = anchorsOff + anch->pointCount();
-        span.cacheKey = unitKeyH;
-        meshOff = span.meshEnd;
-        anchorsOff = span.anchorsEnd;
-        out.units.push_back(std::move(span));
-        meshes.push_back(std::move(mesh));
-        anchors.push_back(std::move(anch));
-    }
+
+    // C4 phase 2: everything past the room fills.
+    for (size_t i = done; i < units.size(); ++i)
+        if (!processUnit(units[i])) return false;
     if (!mergeGeos(meshes, pgg::GeoKind::Mesh, out.mesh, err)) return false;
     if (!mergeGeos(anchors, pgg::GeoKind::Points, out.anchors, err)) return false;
     out.stats.rooms = ir.rooms.size();

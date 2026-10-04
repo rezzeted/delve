@@ -157,6 +157,22 @@ barrels = repeat (empty_mesh(), iterations = nb) |acc| {
 }
 barrel_part = select(is_store, a = barrels, b = empty_mesh())
 
+# Occupied-volume blockers (C4): one anchor per barrel at its footprint
+# center, @range = cylinder radius with a small margin. delve fill strips
+# kind=4 anchors into the occupied registry; decor rules keep clear of them.
+blk = repeat (empty_points(), iterations = nb) |acc| {
+    k = @iteration
+    ax = 0.62 + 0.78 * (k == 1 ? 1.0 : 0.0)
+    az = 0.62 + 0.78 * (k == 2 ? 1.0 : 0.0)
+    bp = transform(mesh_line(count = 1, length = 0.0),
+                   translate = pv + e1 * (sgn * ax) + e2 * (sgn * az))
+    b1 = set(bp, "kind", c.AK_BLOCKER(), domain = points)
+    b2 = set(b1, "dir", vec3(0.0, 1.0, 0.0), domain = points, typeinfo = vector)
+    b3 = set(b2, "range", 0.36, domain = points)
+    acc = merge(acc, b3)
+}
+blockers = select(is_store, a = blk, b = empty_points())
+
 # Assembly-merge normalization: drop the instance payload (@tint) and every
 # normal, then rebuild smooth corner normals so no vec2/mixed-N reaches the
 # level merge (D500).
@@ -180,7 +196,7 @@ spawn1 = set(spawn0, "kind", c.AK_SPAWN(), domain = points)
 spawn2 = set(spawn1, "dir", vec3(0.0, 0.0, 1.0), domain = points, typeinfo = vector)
 spawn = set(spawn2, "range", 0.0, domain = points)
 
-anchors = merge(select(style_ceil != 0, a = lamp, b = empty_points()), select(role == c.RL_HALL(), a = spawn, b = empty_points()))
+anchors = merge(select(style_ceil != 0, a = lamp, b = empty_points()), select(role == c.RL_HALL(), a = spawn, b = empty_points()), blockers)
 
 output mesh
 output anchors

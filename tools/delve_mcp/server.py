@@ -190,8 +190,10 @@ def delve_fill(file: Optional[str] = None, threads: Optional[int] = None) -> dic
     автоматически (перечитывание по mtime), F8-кэш пересчитывает только
     юниты с изменённым входом. Правка layout-яруса требует явного
     delve_layout. threads — потоки PGG (0 = авто). file — слот.
-    Ответ data: {rooms, bodies, facings, nodes, doors, lamps, reused, reran,
-    ms, session:{file}} — reused+reran доказывают тёплую петлю.
+    Ответ data: {rooms, bodies, facings, nodes, doors, lamps, occupied, reused,
+    reran, ms, session:{file}} — reused+reran доказывают тёплую петлю;
+    occupied — число занятых цилиндров реестра C4 (блокеры room_fill +
+    поставленный напольный декор).
     Ошибки: D100 (нет assets), D4xx/D5xx — коды fill в error.kind.
     Пример: delve_fill() → {"rooms": 3, "reused": 0, "reran": 12, ...}.
     """

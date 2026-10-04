@@ -447,6 +447,7 @@ json ServeRuntime::handleFill(uint64_t clientId, const json& args) {
                              {"nodes", s.nodes},
                              {"doors", s.doors},
                              {"lamps", s.lamps},
+                             {"occupied", slot.fill.occupied.size()},
                              {"reused", s.reused.size()},
                              {"reran", s.reran.size()},
                              {"ms", static_cast<long long>(slot.fillMs)}});
