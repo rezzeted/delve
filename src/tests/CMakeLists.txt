@@ -27,6 +27,13 @@ set_property(TARGET delve_layout_test PROPERTY FOLDER tests)
 
 add_test(NAME delve_layout_test COMMAND delve_layout_test)
 
+add_executable(delve_topo_test delve_topo_test.cpp)
+target_link_libraries(delve_topo_test PRIVATE GTest::gtest_main delve)
+target_compile_features(delve_topo_test PRIVATE cxx_std_20)
+set_property(TARGET delve_topo_test PROPERTY FOLDER tests)
+
+add_test(NAME delve_topo_test COMMAND delve_topo_test)
+
 add_executable(delve_ir_test delve_ir_test.cpp)
 target_link_libraries(delve_ir_test PRIVATE GTest::gtest_main delve nlohmann_json::nlohmann_json)
 target_compile_definitions(delve_ir_test PRIVATE

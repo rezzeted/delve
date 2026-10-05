@@ -4,6 +4,7 @@ add_library(delve STATIC
     project.cpp
     layout.cpp
     ir.cpp
+    topo.cpp
 )
 
 target_include_directories(delve PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
