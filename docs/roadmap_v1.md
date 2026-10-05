@@ -122,13 +122,29 @@
 
 ## Пакет E — pgg UX (сабмодуль pgg, коммиты на английском)
 
-### E6. Диагностика pgg: did-you-mean + пачка ошибок
+### E6. Диагностика pgg: did-you-mean + пачка ошибок — сделано
 
 - Проблема: чекер fail-fast (одна ошибка за прогон); E201/E604 без
   кандидатов; биндинги `pgg_params` слетают при перечитывании файла по mtime;
   `pgg_render` без `file=` берёт последний `pgg_load`, а относительный `out=`
   резолвится от корня pgg-репо.
-- Решение: did-you-mean (редакционное расстояние по именам builtin/def) в
-  E201/not_found; сбор всех ошибок фазы; переживание биндингов при reload;
-  `out=` — относительно delve-корня в delve-MCP.
-- Файлы: `thirdparty/pgg` (отдельный коммит апстрима + bump-коммит delve).
+- Решение (в коде): общий хелпер `eval/suggest.{h,cpp}` в pgg (Levenshtein с
+  отсечением + правило префикса, детерминированный порядок); did-you-mean в
+  E201 (кандидаты — builtin'ы), обоих E505 (def'ы модуля / неймспейсы), E103
+  validate+typecheck (видимые имена); `suggestBuiltinNames` (промах `docs`)
+  переведена на тот же хелпер. По аудиту «fail-fast» оказался межфазными
+  gate'ами (parse → imports → expand → typecheck), внутри фазы все ошибки и
+  так собираются пачкой — gate семантически необходим, не трогаем. PggServe:
+  биндинги param переживают reload (явный load и F4) — восстанавливаются по
+  имени; `params` отвечает `suggestions` для неизвестных имён. delve-MCP:
+  `pgg_render out=` резолвится от корня delve-репо (`file=` без аргумента уже
+  подставлялся клиентом — `PggSession._with_file`, тест был).
+- Файлы: pgg `5bd199c` (suggest.{h,cpp}, typecheck/expand/validate,
+  builtin_docs, DocumentSession/ServeRuntime, тесты suggest/typecheck/
+  validate/module, implementation.md, serve_rpc.md); delve — bump +
+  `tools/delve_mcp/pgg_layer.py` (`_absolutize_out`), тест
+  `test_render_out_absolutized_against_delve_root`, `docs/mcp_v1.md`.
+- Гейты: pgg_tests без новых падений (7 золотых mismatch'ей — дрейф платформы,
+  воспроизводятся на чистом HEAD); `PggServe --smoke` PASS; живой RPC —
+  биндинги пережили auto-reload, `suggestions` работает; delve быстрые сьюты
+  зелёные, python unittest 68 OK.

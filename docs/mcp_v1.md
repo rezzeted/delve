@@ -201,6 +201,13 @@ target?, orbit?, zoom?)` · `pgg_probe(file?, spec?, specs?)` ·
 `project.dir` и его `asset_roots`. Сверху PggServe дописывает свой
 `resources/pgg`.
 
+Биндинги `pgg_params` переживают перечитывание файла (явный `pgg_load` и F4
+auto-reload по mtime) — PggServe восстанавливает значение по имени параметра;
+неизвестные имена отвечают `unknown` + `suggestions` (did-you-mean по
+объявленным параметрам). Относительный `out=` у `pgg_render` резолвится от
+корня delve-репо (не pgg), `None` — серверный дефолт `tmp/pgg_rpc_shots/`
+pgg-репо.
+
 ## Петля агента
 
 ```

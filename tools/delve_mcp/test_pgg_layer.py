@@ -515,6 +515,22 @@ class PggLayerLibRootsTests(unittest.TestCase):
             layer.params({"stories": 3}, file="/other.pgg")
             self.assertEqual(calls[-1]["args"]["file"], "/other.pgg")  # explicit wins
 
+    def test_render_out_absolutized_against_delve_root(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            _touch(root, "assets/x.pgg")
+            calls: list[dict] = []
+            layer = self._layer(root, calls)
+            layer.load("assets/x.pgg")
+
+            layer.render("facing", out="tmp/shots/a.png")
+            self.assertEqual(calls[-1]["args"]["out"], str(Path(root) / "tmp" / "shots" / "a.png"))
+
+            layer.render("facing", out="/abs/b.png")
+            self.assertEqual(calls[-1]["args"]["out"], "/abs/b.png")  # absolute passes through
+
+            layer.render("facing")
+            self.assertNotIn("out", calls[-1]["args"])  # None keeps the server default
+
 
 if __name__ == "__main__":
     unittest.main()

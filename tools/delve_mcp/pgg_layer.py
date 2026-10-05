@@ -77,7 +77,7 @@ class PggLayer:
                target: Optional[str] = None, orbit: Optional[list[float]] = None,
                zoom: Optional[float] = None) -> dict[str, Any]:
         return self.session.call("render", _with_file({
-            "node": node, "out": out, "size": size, "ortho": ortho,
+            "node": node, "out": self._absolutize_out(out), "size": size, "ortho": ortho,
             "target": target, "orbit": orbit, "zoom": zoom,
         }, file))
 
@@ -113,6 +113,19 @@ class PggLayer:
         if cand.is_file():
             return str(cand)
         return path
+
+    def _absolutize_out(self, out: Optional[str]) -> Optional[str]:
+        """Resolve a relative render ``out`` against the delve repo root.
+
+        Unlike ``_absolutize_asset`` the target usually does not exist yet, so
+        every relative path is absolutized (a bare ``out=shots/a.png`` landing
+        under thirdparty/pgg is never what a delve user wants). Absolute paths
+        pass through; None keeps the server-side default (tmp/pgg_rpc_shots of
+        the pgg repo).
+        """
+        if out is None or os.path.isabs(out):
+            return out
+        return str(Path(self.delve.repo_root) / out)
 
     def _lib_roots(self, path: str, explicit: Optional[list[str]]) -> list[str]:
         if explicit is not None:
