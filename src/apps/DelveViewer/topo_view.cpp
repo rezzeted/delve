@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <unordered_map>
 #include <vector>
 
 #include "panel.h"
@@ -28,6 +29,11 @@ constexpr ImU32 kDoorOther = IM_COL32(240, 160, 60, 255);
 constexpr ImU32 kSelection = IM_COL32(255, 230, 120, 255);
 constexpr ImU32 kGridMinor = IM_COL32(255, 255, 255, 12);
 constexpr ImU32 kGridMajor = IM_COL32(255, 255, 255, 24);
+// Graph pane (PggViewer GraphCanvas style): fixed-size node boxes in points
+// (independent of zoom) and the dark canvas background.
+constexpr float kGraphNodeW = 88.0f;
+constexpr float kGraphNodeH = 36.0f;
+constexpr ImU32 kGraphBg = IM_COL32(24, 27, 32, 255);
 
 ImU32 withAlpha(ImU32 c, unsigned a) { return (c & 0x00FFFFFF) | (a << 24); }
 
@@ -66,9 +72,10 @@ void fitCamToBBox(TopoCam& cam, float w, float h, double minx, double miny, doub
     cam.offsetY = static_cast<float>(h * 0.5 - midY * cam.zoom);
 }
 
-void fitPlanCam(TopoCam& cam, const delve::TopoModel& model, float w, float h) {
+// World bbox over the placed nodes; false when nothing is placed.
+bool placedBBox(const delve::TopoModel& model, double& minx, double& maxx, double& miny,
+                double& maxy) {
     bool any = false;
-    double minx = 0, maxx = 0, miny = 0, maxy = 0;
     for (const auto& n : model.nodes) {
         if (!n.hasLayout) continue;
         if (!any) {
@@ -84,10 +91,32 @@ void fitPlanCam(TopoCam& cam, const delve::TopoModel& model, float w, float h) {
             maxy = std::max(maxy, static_cast<double>(n.maxy));
         }
     }
-    if (!any) {
-        minx = maxx = miny = maxy = 0;
-    }
+    if (!any) minx = maxx = miny = maxy = 0;
+    return any;
+}
+
+void fitPlanCam(TopoCam& cam, const delve::TopoModel& model, float w, float h) {
+    double minx, maxx, miny, maxy;
+    placedBBox(model, minx, maxx, miny, maxy);
     fitCamToBBox(cam, w, h, minx, miny, maxx, maxy);
+}
+
+// Fit the graph camera: like the plan, but the node boxes are fixed-size in
+// points, so the world bbox is expanded by half a box (converted at an
+// initial zoom) before solving the final zoom.
+void fitGraphCam(TopoCam& cam, const delve::TopoModel& model, float w, float h) {
+    double minx, maxx, miny, maxy;
+    placedBBox(model, minx, maxx, miny, maxy);
+    double spanX = std::max(maxx - minx, 1.0) + 3.0;
+    double spanY = std::max(maxy - miny, 1.0) + 3.0;
+    const float z0 = std::clamp(static_cast<float>(std::min(w / spanX, h / spanY)), 2.0f, 96.0f);
+    spanX += 2.0 * (kGraphNodeW * 0.5 + 16.0) / z0;
+    spanY += 2.0 * (kGraphNodeH * 0.5 + 16.0) / z0;
+    cam.zoom = std::clamp(static_cast<float>(std::min(w / spanX, h / spanY)), 2.0f, 96.0f);
+    const double midX = (minx + maxx) * 0.5;
+    const double midY = (miny + maxy) * 0.5;
+    cam.offsetX = static_cast<float>(w * 0.5 - midX * cam.zoom);
+    cam.offsetY = static_cast<float>(h * 0.5 - midY * cam.zoom);
 }
 
 // Even-odd point-in-polygon on the XZ plan (same rule as the top overlay),
@@ -300,5 +329,194 @@ TopoPlanResult drawTopoPlan(const delve::TopoModel& model, Selection& selection,
     }
 
     dl->PopClipRect();
+    return res;
+}
+
+void fitTopoGraphCam(TopoGraphState& st, double minx, double miny, double maxx, double maxy) {
+    fitCamToBBox(st.cam, std::max(st.viewW, 64.0f), std::max(st.viewH, 64.0f), minx, miny, maxx,
+                 maxy);
+}
+
+TopoGraphResult drawTopoGraph(const delve::TopoModel& model, Selection& selection,
+                              TopoGraphState& st) {
+    TopoGraphResult res;
+
+    // As in the plan pane: the toolbar shares the first line, remember the
+    // full content width on a fresh line.
+    const float fullW = ImGui::GetContentRegionAvail().x;
+
+    size_t placed = 0, unplaced = 0;
+    for (const auto& n : model.nodes) {
+        if (n.hasLayout) placed++;
+        else unplaced++;
+    }
+
+    bool wantFit = false;
+    if (model.nodes.empty()) {
+        ImGui::TextDisabled("(no graph in the project)");
+    } else {
+        if (ImGui::SmallButton("Fit")) wantFit = true;
+        ImGui::SameLine();
+        char sum[96];
+        std::snprintf(sum, sizeof(sum), "%zu rooms, %zu passages", placed, model.edges.size());
+        ImGui::TextDisabled("%s", sum);
+    }
+
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    avail.x = std::max(fullW, 64.0f);
+    avail.y = std::max(avail.y, 64.0f);
+    // The unplaced list takes one text line below the canvas.
+    if (unplaced > 0) avail.y = std::max(avail.y - ImGui::GetTextLineHeightWithSpacing(), 64.0f);
+    st.viewW = avail.x;
+    st.viewH = avail.y;
+    if (model.nodes.empty()) {
+        ImGui::Dummy(avail);
+        return res;
+    }
+
+    ImGui::InvisibleButton("##topo_graph_canvas", avail,
+                           ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight |
+                               ImGuiButtonFlags_MouseButtonMiddle);
+    const ImVec2 rmin = ImGui::GetItemRectMin();
+    const ImVec2 rmax = ImGui::GetItemRectMax();
+
+    if (!st.fitted || wantFit) {
+        fitGraphCam(st.cam, model, avail.x, avail.y);
+        st.fitted = true;
+    }
+
+    const ImGuiIO& io = ImGui::GetIO();
+    const ImVec2 mouseLocal(io.MousePos.x - rmin.x, io.MousePos.y - rmin.y);
+    const bool hovered = ImGui::IsItemHovered();
+
+    // Zoom to cursor on the wheel, pan on any-button drag.
+    if (hovered && io.MouseWheel != 0.0f)
+        zoomToCursor(st.cam, mouseLocal, io.MouseWheel > 0 ? 1.2f : 1.0f / 1.2f);
+    if (ImGui::IsItemActive() &&
+        (ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0.0f) ||
+         ImGui::IsMouseDragging(ImGuiMouseButton_Right, 0.0f) ||
+         ImGui::IsMouseDragging(ImGuiMouseButton_Middle, 0.0f))) {
+        st.cam.offsetX += io.MouseDelta.x;
+        st.cam.offsetY += io.MouseDelta.y;
+    }
+
+    // Hover: the topmost node box containing the cursor (screen-space hit in
+    // canvas-local points).
+    int hoverNode = -1;
+    if (hovered) {
+        for (int i = static_cast<int>(model.nodes.size()) - 1; i >= 0; --i) {
+            const auto& n = model.nodes[i];
+            if (!n.hasLayout) continue;
+            const ImVec2 c = toScreen(st.cam, rmin, n.cx, n.cz);
+            const float clx = c.x - rmin.x, cly = c.y - rmin.y;
+            if (std::fabs(mouseLocal.x - clx) <= kGraphNodeW * 0.5f &&
+                std::fabs(mouseLocal.y - cly) <= kGraphNodeH * 0.5f) {
+                hoverNode = i;
+                break;
+            }
+        }
+    }
+    st.hoverNode = hoverNode;
+
+    // Click = LMB release within a small drag threshold (as the plan pane).
+    bool clicked = false;
+    if (ImGui::IsItemDeactivated() && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+        const ImVec2 press = io.MouseClickedPos[ImGuiMouseButton_Left];
+        const float dx = io.MousePos.x - press.x, dy = io.MousePos.y - press.y;
+        if (dx * dx + dy * dy < 16.0f) clicked = true;
+    }
+    if (clicked) {
+        if (hoverNode >= 0) {
+            selection = Selection{Selection::Kind::Room, model.nodes[hoverNode].id};
+            res.selectionChanged = true;
+        } else if (selection.kind != Selection::Kind::None) {
+            selection = Selection{};
+            res.selectionChanged = true;
+        }
+    }
+    if (hoverNode >= 0 && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) &&
+        ImGui::IsItemHovered()) {
+        selection = Selection{Selection::Kind::Room, model.nodes[hoverNode].id};
+        res.selectionChanged = true;
+        res.focus = true;
+    }
+
+    // --- drawing ---------------------------------------------------------
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->PushClipRect(rmin, rmax, true);
+    dl->AddRectFilled(rmin, rmax, kGraphBg);
+
+    // Wires under the boxes: bezier node-center to node-center, dtype color.
+    {
+        std::unordered_map<std::string, int> idx;
+        idx.reserve(model.nodes.size());
+        for (size_t i = 0; i < model.nodes.size(); ++i)
+            idx.emplace(model.nodes[i].id, static_cast<int>(i));
+        for (const auto& e : model.edges) {
+            const auto ia = idx.find(e.a);
+            const auto ib = idx.find(e.b);
+            if (ia == idx.end() || ib == idx.end()) continue;
+            const auto& na = model.nodes[ia->second];
+            const auto& nb = model.nodes[ib->second];
+            if (!na.hasLayout || !nb.hasLayout) continue;
+            const ImVec2 p0 = toScreen(st.cam, rmin, na.cx, na.cz);
+            const ImVec2 p1 = toScreen(st.cam, rmin, nb.cx, nb.cz);
+            const float bend = std::max(30.0f, std::fabs(p1.x - p0.x) * 0.4f);
+            const ImU32 c = withAlpha(e.door == "open" ? kDoorOpen : kDoorOther, 200);
+            dl->AddBezierCubic(p0, ImVec2(p0.x + bend, p0.y), ImVec2(p1.x - bend, p1.y), p1, c,
+                               1.6f);
+        }
+    }
+
+    // Door-type labels at the edge midpoints: a dark plate so they read over
+    // the wires (only when both endpoints are placed).
+    for (const auto& e : model.edges) {
+        if (!e.labelOk || e.door.empty()) continue;
+        const ImVec2 at = toScreen(st.cam, rmin, e.lx, e.lz);
+        const ImVec2 ts = ImGui::CalcTextSize(e.door.c_str());
+        const ImVec2 a(at.x - ts.x * 0.5f - 3.0f, at.y - ts.y * 0.5f - 2.0f);
+        const ImVec2 b(at.x + ts.x * 0.5f + 3.0f, at.y + ts.y * 0.5f + 2.0f);
+        dl->AddRectFilled(a, b, IM_COL32(16, 18, 22, 200));
+        dl->AddText(ImVec2(a.x + 3.0f, a.y + 2.0f),
+                    e.door == "open" ? kDoorOpen : kDoorOther, e.door.c_str());
+    }
+
+    // Node boxes: fixed 88x36 points, centered at the centroids, id + role.
+    for (size_t i = 0; i < model.nodes.size(); ++i) {
+        const auto& n = model.nodes[i];
+        if (!n.hasLayout) continue;
+        const ImVec2 c = toScreen(st.cam, rmin, n.cx, n.cz);
+        const ImVec2 a(c.x - kGraphNodeW * 0.5f, c.y - kGraphNodeH * 0.5f);
+        const ImVec2 b(c.x + kGraphNodeW * 0.5f, c.y + kGraphNodeH * 0.5f);
+        const ImU32 role = roleColor(model, n.role);
+        dl->AddRectFilled(a, b, withAlpha(role, 46), 4.0f);
+        ImU32 border = withAlpha(role, 220);
+        float thickness = 1.2f;
+        if (selection.kind == Selection::Kind::Room && selection.id == n.id) {
+            border = kSelection;
+            thickness = 2.2f;
+        } else if (st.hoverNode == static_cast<int>(i)) {
+            border = IM_COL32(200, 210, 235, 255);
+        }
+        dl->AddRect(a, b, border, 4.0f, 0, thickness);
+        dl->PushClipRect(a, b, true);
+        dl->AddText(ImVec2(a.x + 6.0f, a.y + 4.0f), IM_COL32(232, 236, 244, 255), n.id.c_str());
+        dl->AddText(ImVec2(a.x + 6.0f, a.y + 19.0f), withAlpha(role, 220), n.role.c_str());
+        dl->PopClipRect();
+    }
+
+    dl->PopClipRect();
+
+    // Unplaced graph rooms (no layout): a single text line under the canvas.
+    if (unplaced > 0) {
+        std::string ids;
+        for (const auto& n : model.nodes)
+            if (!n.hasLayout) {
+                if (!ids.empty()) ids += ", ";
+                ids += n.id;
+            }
+        ImGui::TextDisabled("unplaced: %s", ids.c_str());
+    }
     return res;
 }

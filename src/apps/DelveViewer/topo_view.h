@@ -1,10 +1,11 @@
 #pragma once
 
 // DelveViewer Topo tab (F9 extension): read-only view of the level-synth
-// topology. v1 pane: the 2D layout plan — room/corridor contours and door
-// segments in world grid cells (the layout tier, not meters), pure ImGui
-// draw lists (no new dependencies). The model is the GUI-free
-// delve::TopoModel (N4); the passage graph pane follows in the same tab.
+// topology — two side-by-side panes over the GUI-free delve::TopoModel
+// (N4): the 2D layout plan (room/corridor contours and door segments in
+// world grid cells, the layout tier, not meters) and the passage graph
+// (node boxes + bezier wires, PggViewer GraphCanvas style). Pure ImGui
+// draw lists, no new dependencies, no editing in v1.
 
 #include <imgui.h>
 
@@ -51,3 +52,29 @@ TopoPlanResult drawTopoPlan(const delve::TopoModel& model, Selection& selection,
 
 // Fit the plan camera to a bbox in world grid cells (double-click focus).
 void fitTopoPlanCam(TopoPlanState& st, double minx, double miny, double maxx, double maxy);
+
+// Graph pane state: the passage graph in the same world-cell space as the
+// plan (node boxes at room centroids), independent camera.
+struct TopoGraphState {
+    TopoCam cam;
+    int hoverNode = -1;  // hovered node index in the model (-1 = none)
+    bool fitted = false;
+    float viewW = 0.0f;  // last canvas size in points (for fitTopoGraphCam)
+    float viewH = 0.0f;
+};
+
+// Actions for main.cpp (the result-flag pattern of panel.h).
+struct TopoGraphResult {
+    bool selectionChanged = false;
+    bool focus = false;  // double-click a node: focus the graph camera on it
+};
+
+// Graph pane body: a toolbar row (Fit + summary), the node/wire canvas with
+// pan (LMB/RMB/MMB drag), zoom to cursor (wheel) and picking — a click on a
+// node selects the room, a click on empty space clears the selection, a
+// double-click also asks to focus. Unplaced graph rooms (no layout) are not
+// drawn; they are listed as text under the canvas.
+TopoGraphResult drawTopoGraph(const delve::TopoModel& model, Selection& selection, TopoGraphState& st);
+
+// Fit the graph camera to a bbox in world grid cells (double-click focus).
+void fitTopoGraphCam(TopoGraphState& st, double minx, double miny, double maxx, double maxy);

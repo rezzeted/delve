@@ -96,12 +96,16 @@ int g_activeView = 0;  // 0 = 3D (default tab), 1 = Top, 2 = Topo
 // the camera + layer toggles.
 delve::TopoModel g_topoModel;
 TopoPlanState g_topoPlan;
+TopoGraphState g_topoGraph;
 
 void rebuildTopoModel(bool resetCamera) {
     g_topoModel = g_level.project.layout
                       ? delve::build_topo(g_level.project.layout.value(), g_level.layoutData)
                       : delve::TopoModel{};
-    if (resetCamera) g_topoPlan = TopoPlanState{};
+    if (resetCamera) {
+        g_topoPlan = TopoPlanState{};
+        g_topoGraph = TopoGraphState{};
+    }
 }
 
 Selection g_selection;
@@ -260,6 +264,7 @@ void closeLevel() {
     g_level = Level{};
     g_topoModel = delve::TopoModel{};
     g_topoPlan = TopoPlanState{};
+    g_topoGraph = TopoGraphState{};
     resetViewState();
     g_preview3d.clear();
     g_previewTop.clear();
@@ -540,11 +545,36 @@ void drawPanes(int w, int h) {
         if (ImGui::BeginTabItem("Topo")) {
             g_activeView = 2;
             if (g_level.loaded) {
-                const TopoPlanResult topoRes = drawTopoPlan(g_topoModel, g_selection, g_topoPlan);
-                if (topoRes.focus) {
+                // Two side-by-side panes over the same TopoModel: the 2D plan
+                // and the passage graph (independent cameras, half the tab
+                // width each).
+                const ImVec2 tabAvail = ImGui::GetContentRegionAvail();
+                const float paneW = std::max((tabAvail.x - 12.0f) * 0.5f, 160.0f);
+                const float paneH = std::max(tabAvail.y, 160.0f);
+
+                TopoPlanResult planRes;
+                if (ImGui::BeginChild("##topo_plan", ImVec2(paneW, paneH))) {
+                    planRes = drawTopoPlan(g_topoModel, g_selection, g_topoPlan);
+                    ImGui::EndChild();
+                }
+                if (planRes.focus) {
                     for (const auto& n : g_topoModel.nodes) {
                         if (n.id == g_selection.id && n.hasLayout) {
                             fitTopoPlanCam(g_topoPlan, n.minx, n.miny, n.maxx, n.maxy);
+                            break;
+                        }
+                    }
+                }
+                ImGui::SameLine();
+                TopoGraphResult graphRes;
+                if (ImGui::BeginChild("##topo_graph", ImVec2(paneW, paneH))) {
+                    graphRes = drawTopoGraph(g_topoModel, g_selection, g_topoGraph);
+                    ImGui::EndChild();
+                }
+                if (graphRes.focus) {
+                    for (const auto& n : g_topoModel.nodes) {
+                        if (n.id == g_selection.id && n.hasLayout) {
+                            fitTopoGraphCam(g_topoGraph, n.minx, n.miny, n.maxx, n.maxy);
                             break;
                         }
                     }
