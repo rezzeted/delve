@@ -1,7 +1,8 @@
 // DelveViewer (F9): 3D + top preview of a filled delve level with an IR
 // overlay (room ids, doors, wall/node owners, anchors), top-view picking with
-// a provenance info panel, unit highlight/solo, and refill/re-layout over the
-// F8 unit cache.
+// a provenance info panel, unit highlight/solo, refill/re-layout over the
+// F8 unit cache, and a read-only Topo view of the level-synth topology
+// (2D layout plan; the passage graph pane follows in the same tab).
 //   DelveViewer [project.json] [--smoke]
 // No arguments: the window opens empty; a project is opened from the side
 // panel (path field + recent list) or by dragging the project .json onto the
@@ -34,6 +35,7 @@
 #include "filedialog.h"
 #include "level.h"
 #include "panel.h"
+#include "topo_view.h"
 
 #define SOKOL_IMPL
 #define SOKOL_NO_ENTRY
@@ -87,7 +89,20 @@ GeometryPreview g_preview3d;
 GeometryPreview g_previewTop;
 PreviewPaneRect g_rect3d, g_rectTop;
 OverlayLayers g_layers;
-int g_activeView = 0;  // 0 = 3D (default tab), 1 = Top
+int g_activeView = 0;  // 0 = 3D (default tab), 1 = Top, 2 = Topo
+
+// Topo tab state: the model is a pure projection of the project graph and
+// the generated layout (rebuilt on load/refill/relayout), the pane state is
+// the camera + layer toggles.
+delve::TopoModel g_topoModel;
+TopoPlanState g_topoPlan;
+
+void rebuildTopoModel(bool resetCamera) {
+    g_topoModel = g_level.project.layout
+                      ? delve::build_topo(g_level.project.layout.value(), g_level.layoutData)
+                      : delve::TopoModel{};
+    if (resetCamera) g_topoPlan = TopoPlanState{};
+}
 
 Selection g_selection;
 std::string g_selectedUnit;     // row selected in the units panel
@@ -231,6 +246,7 @@ void openLevel(const std::string& projRaw) {
     }
     g_loadError.clear();
     resetViewState();
+    rebuildTopoModel(true);  // fresh layout: fresh camera (auto-fit)
     rebuildPreviews(true);
     logLine(fillSummary("load"));
     rememberRecent(proj);
@@ -242,6 +258,8 @@ void openLevel(const std::string& projRaw) {
 // previews are cleared, the generate panel stays as it was.
 void closeLevel() {
     g_level = Level{};
+    g_topoModel = delve::TopoModel{};
+    g_topoPlan = TopoPlanState{};
     resetViewState();
     g_preview3d.clear();
     g_previewTop.clear();
@@ -264,6 +282,7 @@ void doRefill() {
         return;
     }
     resetViewState();
+    rebuildTopoModel(false);  // same layout: keep the camera
     rebuildPreviews(false);  // same layout: keep the camera
     logLine(fillSummary("refill"));
 }
@@ -275,6 +294,7 @@ void doRelayout() {
         return;
     }
     resetViewState();
+    rebuildTopoModel(true);  // new layout: fresh camera (auto-fit)
     rebuildPreviews(true);  // new layout: refit
     logLine(fillSummary("re-layout"));
 }
@@ -517,6 +537,23 @@ void drawPanes(int w, int h) {
             }
             ImGui::EndTabItem();
         }
+        if (ImGui::BeginTabItem("Topo")) {
+            g_activeView = 2;
+            if (g_level.loaded) {
+                const TopoPlanResult topoRes = drawTopoPlan(g_topoModel, g_selection, g_topoPlan);
+                if (topoRes.focus) {
+                    for (const auto& n : g_topoModel.nodes) {
+                        if (n.id == g_selection.id && n.hasLayout) {
+                            fitTopoPlanCam(g_topoPlan, n.minx, n.miny, n.maxx, n.maxy);
+                            break;
+                        }
+                    }
+                }
+            } else {
+                ImGui::TextDisabled("no level loaded — generate a project from the panel");
+            }
+            ImGui::EndTabItem();
+        }
         ImGui::EndTabBar();
     }
     ImGui::End();
@@ -570,9 +607,10 @@ void frame() {
 
         // Offscreen pass of the active view only: outside (before) the
         // swapchain pass that draws the ImGui image referencing its target.
+        // The Topo tab draws into ImGui draw lists only — no preview pass.
         if (g_activeView == 0) {
             g_preview3d.render();
-        } else {
+        } else if (g_activeView == 1) {
             g_previewTop.render();
         }
     }
