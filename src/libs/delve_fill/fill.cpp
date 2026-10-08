@@ -1063,11 +1063,15 @@ pgg::GeoPtr splitBlockers(const pgg::GeoPtr& g, const std::string& unit,
     auto rest = std::make_shared<pgg::Geo>(*g);
     rest->positions = std::move(pos);
     rest->pointAttrs = std::move(attrs);
-    if (rest->normals && rest->normals->size() == g->pointCount()) {
-        auto nv = std::make_shared<std::vector<glm::vec3>>();
-        nv->reserve(keep.size());
-        for (size_t i : keep) nv->push_back((*g->normals)[i]);
-        rest->normals = std::move(nv);
+    if (rest->normals) {
+        if (rest->normals->size() == g->pointCount()) {
+            auto nv = std::make_shared<std::vector<glm::vec3>>();
+            nv->reserve(keep.size());
+            for (size_t i : keep) nv->push_back((*g->normals)[i]);
+            rest->normals = std::move(nv);
+        } else {
+            rest->normals.reset();  // a mismatched column cannot be filtered
+        }
     }
     return rest;
 }
