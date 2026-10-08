@@ -553,10 +553,9 @@ void drawPanes(int w, int h) {
                 const float paneH = std::max(tabAvail.y, 160.0f);
 
                 TopoPlanResult planRes;
-                if (ImGui::BeginChild("##topo_plan", ImVec2(paneW, paneH))) {
+                if (ImGui::BeginChild("##topo_plan", ImVec2(paneW, paneH)))
                     planRes = drawTopoPlan(g_topoModel, g_selection, g_topoPlan);
-                    ImGui::EndChild();
-                }
+                ImGui::EndChild();
                 if (planRes.focus) {
                     for (const auto& n : g_topoModel.nodes) {
                         if (n.id == g_selection.id && n.hasLayout) {
@@ -567,10 +566,9 @@ void drawPanes(int w, int h) {
                 }
                 ImGui::SameLine();
                 TopoGraphResult graphRes;
-                if (ImGui::BeginChild("##topo_graph", ImVec2(paneW, paneH))) {
+                if (ImGui::BeginChild("##topo_graph", ImVec2(paneW, paneH)))
                     graphRes = drawTopoGraph(g_topoModel, g_selection, g_topoGraph);
-                    ImGui::EndChild();
-                }
+                ImGui::EndChild();
                 if (graphRes.focus) {
                     for (const auto& n : g_topoModel.nodes) {
                         if (n.id == g_selection.id && n.hasLayout) {
