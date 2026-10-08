@@ -886,7 +886,7 @@ TEST(DelveCheck, ElementsCachedVerdicts) {
         stale.store(delve::UnitKey{101}, pgg::makePoints({}), pgg::makePoints({}));
         stale.storeCheck(delve::UnitKey{101},
                          delve::UnitCache::CheckVerdict{delve::kElementsCheckVersion + 1,
-                                                        false, {"stale finding"}});
+                                                        {"stale finding"}});
         delve::FillResult fill = makeCleanFill({mkSpan("unit:a", 0, 4, 101)});
         std::vector<delve::CheckDiag> ds;
         EXPECT_TRUE(delve::check_elements_cached(fill, &stale, ds)) << diagText(ds);

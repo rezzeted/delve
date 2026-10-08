@@ -648,8 +648,8 @@ bool check_elements_cached(const FillResult& fill, UnitCache* cache,
             std::vector<std::string> msgs;
             checkSpanElements(fill.mesh, span.meshBegin, span.meshEnd, styles, msgs);
             if (span.cacheKey != 0)
-                cache->storeCheck(key, UnitCache::CheckVerdict{kElementsCheckVersion,
-                                                               msgs.empty(), msgs});
+                cache->storeCheck(key,
+                                  UnitCache::CheckVerdict{kElementsCheckVersion, msgs});
             pushSpanMsgs(diags, mark, span.id, msgs);
         }
         if (diags.size() >= mark + kCap) return false;

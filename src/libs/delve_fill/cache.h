@@ -53,7 +53,6 @@ class UnitCache {
     // unit-id-relative suffixes (the caller re-prefixes the current span id).
     struct CheckVerdict {
         uint64_t version = 0;
-        bool ok = true;
         std::vector<std::string> messages;
     };
     struct Entry {
@@ -63,7 +62,9 @@ class UnitCache {
     };
     bool lookup(const UnitKey& k, Entry& out) const {
         const auto it = map_.find(k.h);
-        if (it == map_.end()) return false;
+        // A verdict-only entry (storeCheck without store) is a geometry miss:
+        // returning true with null mesh would crash the assembly transform.
+        if (it == map_.end() || !it->second.mesh) return false;
         out = it->second;
         return true;
     }
