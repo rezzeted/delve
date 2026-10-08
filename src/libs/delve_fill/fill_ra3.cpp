@@ -266,7 +266,8 @@ const pgg::AttrColumn* pointCol(const pgg::GeoPtr& g, const char* name) {
 
 bool check_asset(const std::string& slot, const std::string& asset_path,
                  const std::vector<std::string>& import_roots,
-                 std::vector<SlotDiag>& diags, std::set<std::string>* declared_params) {
+                 std::vector<SlotDiag>& diags,
+                 std::map<std::string, DeclaredParam>* declared_params) {
     // decor:<tag> shares the decor contract (slots §2.6: tag is a param).
     std::string kind = slot;
     if (kind.rfind("decor:", 0) == 0) kind = "decor";
@@ -301,7 +302,8 @@ bool check_asset(const std::string& slot, const std::string& asset_path,
             }
             info.hasDefault = p->hasDefault;
             params[p->name] = info;
-            if (declared_params) declared_params->insert(p->name);
+            if (declared_params)
+                (*declared_params)[p->name] = {info.base, info.geoKind, info.hasDefault};
         } else if (item->kind == pgg::NodeKind::OutputDecl) {
             outputs.push_back(static_cast<const pgg::OutputDecl*>(item)->name);
         } else if (item->kind == pgg::NodeKind::Def &&

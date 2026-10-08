@@ -4,6 +4,7 @@
 // F8: optional unit-output cache (cache.h), keyed by slot + bindings + asset
 // content (R-A7); local-frame hits are placed at assembly.
 
+#include <map>
 #include <set>
 #include <string>
 #include <vector>
@@ -29,12 +30,19 @@ struct SlotDiag {
 // import_roots resolve the asset's imports (project roots + delve asset dir);
 // the asset's own directory is implicit. True when no errors (warnings ok).
 // Unknown slot kind -> false + a single delve/slot error.
-// declared_params (optional) collects the asset's param names — the host
-// binds optional inputs (room_fill `cuts`, decor `pit`) only when declared.
+// declared_params (optional) collects the asset's params — the host binds
+// optional inputs (room_fill `cuts`, decor `pit`) only when declared, and a
+// declared geo param without a default is host-bound stream data (slots §1):
+// a unit without data for it gets an empty geo of the declared kind.
+struct DeclaredParam {
+    std::string base;     // pgg type base ("geo", "int", "f32", ...)
+    std::string geoKind;  // for base == "geo": "points" / "mesh"
+    bool hasDefault = false;
+};
 bool check_asset(const std::string& slot, const std::string& asset_path,
                  const std::vector<std::string>& import_roots,
                  std::vector<SlotDiag>& diags,
-                 std::set<std::string>* declared_params = nullptr);
+                 std::map<std::string, DeclaredParam>* declared_params = nullptr);
 
 // Contract lint on top of check_asset: runs the asset once with minimal
 // synthetic inputs from the slot contract (seg/contour/... fixtures built in

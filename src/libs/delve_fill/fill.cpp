@@ -1144,7 +1144,7 @@ bool fill_level(const IrV2& ir, const Project& project, const FillOpts& opts, Fi
     for (const auto& rule : project.fill.decor)
         if (!ir.rooms.empty()) need["decor:" + rule.tag] = ir.rooms.size();
     std::map<std::string, std::string> assets;  // slot -> resolved file
-    std::map<std::string, std::set<std::string>> declared;  // slot -> param names
+    std::map<std::string, std::map<std::string, DeclaredParam>> declared;  // slot -> params
     for (const auto& [slot, n] : need) {
         if (n == 0) continue;
         const auto sit = project.slots.find(slot);
@@ -1253,15 +1253,35 @@ bool fill_level(const IrV2& ir, const Project& project, const FillOpts& opts, Fi
         return true;
     };
 
-    // C4/D5 phase 1: room fills run before any decor expansion, so floor
-    // decor picks spots with a complete occupied registry. D5: a room_fill
-    // asset declaring `cuts` (a param has no geo-empty default in PGG, so the
-    // host always binds it) gets an empty pit list here; the phase-1b re-run
-    // of a cut room replaces it with the real pits.
-    const bool rfCuts = declared["room_fill"].count("cuts") != 0;
-    if (rfCuts)
-        for (auto& u : units)
-            u.bindings.emplace_back("cuts", pgg::Value(emptyGeo(pgg::GeoKind::Points)));
+    // Slots §1: a declared geo param without a default is host-bound stream
+    // data (room_fill `cuts`, D5). A unit without data for it gets an empty
+    // geo of the declared kind, so the asset always sees its full signature
+    // (the D5 phase-1b re-run of a cut room then replaces the empty `cuts`
+    // with the real pits — a new F8 key). Room fills need theirs before the
+    // phase-1 run; all other units are bound after every expansion (below).
+    auto bindStreamGeo = [&](size_t begin, size_t end) {
+        for (size_t i = begin; i < end; ++i) {
+            Unit& u = units[i];
+            const auto dit = declared.find(u.slot);
+            if (dit == declared.end()) continue;
+            for (const auto& [name, dp] : dit->second) {
+                if (dp.base != "geo" || dp.hasDefault) continue;
+                bool bound = false;
+                for (const auto& [bn, bv] : u.bindings)
+                    if (bn == name) {
+                        bound = true;
+                        break;
+                    }
+                if (!bound)
+                    u.bindings.emplace_back(
+                        name, pgg::Value(emptyGeo(dp.geoKind == "mesh" ? pgg::GeoKind::Mesh
+                                                                       : pgg::GeoKind::Points)));
+            }
+        }
+    };
+    bindStreamGeo(0, units.size());
+    const auto rfCutsIt = declared["room_fill"].find("cuts");
+    const bool rfCuts = rfCutsIt != declared["room_fill"].end() && !rfCutsIt->second.hasDefault;
     std::vector<UnitOut> outs(units.size());
     for (size_t i = 0; i < units.size(); ++i)
         if (!processUnit(units[i], true, outs[i])) return false;
@@ -1312,6 +1332,9 @@ bool fill_level(const IrV2& ir, const Project& project, const FillOpts& opts, Fi
                     return false;
             }
         }
+
+    // Host-bound stream geo for every unit past the room fills (slots §1).
+    bindStreamGeo(roomCount, units.size());
 
     // D5 phase 1b: rooms with floor pits re-run with the real `cuts` binding
     // replacing the empty phase-1 one (a new F8 key; blockers are not
