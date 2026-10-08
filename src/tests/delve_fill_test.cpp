@@ -887,29 +887,47 @@ TEST(DelveFill, DecorWallPlace) {
 }
 
 // D5: a decor rule with cut_r > 0 punches a real pit into the room_fill
-// floor. fill_v2 on the 6x6 one-room IR with the drain at the bbox center
-// (3, 3): floor stones/bed gone from the bore (0.28 - 0.07 lining), a shaft
-// bottom ~0.6 m down, the radial-block apron ring on top. The room's barrel
-// blockers register once — the cut re-run must not duplicate them.
+// floor. fill_v2 on a 6x4 m one-room IR (bbox center (3, 2) — deliberately
+// off the diagonal, so an x/z transposition in the pit builders is visible):
+// floor stones/bed gone from the bore (0.28 - 0.07 lining), a shaft bottom
+// ~0.6 m down, the radial-block apron ring on top — all of it at (3, 2) and
+// none of it at the transposed (2, 3). The room's barrel blockers register
+// once — the cut re-run must not duplicate them.
 TEST(DelveFill, DecorFloorCuts) {
-    const delve::IrV2 ir = oneRoomIr();
+    delve::IrV2 ir6x4;
+    {
+        delve::IrRoom room;
+        room.id = "1";
+        room.role = "hall";
+        room.grid = {{0, 0}, {3, 0}, {3, 2}, {0, 2}};
+        room.h = 3.0;
+        room.style = "stone";
+        room.floor_style = "stone";
+        room.ceil_style = "none";
+        ir6x4.rooms = {room};
+    }
     delve::Project p = loadDotProject(
         "{\"tag\": \"drain\", \"align\": \"center\", \"cut_r\": 0.28, \"radius\": 0.85}");
     p.slots["room_fill"] = "rooms/fill_v2.pgg";
     p.slots["decor:drain"] = "empty_decor.pgg";  // mesh-free: pure placement
-    const delve::FillResult out = fillOneRoom(ir, p);
+    const delve::FillResult out = fillOneRoom(ir6x4, p);
 
-    const double cx = 3.0, cz = 3.0;
-    size_t floorNear = 0, bottomNear = 0, apronNear = 0;
+    const double cx = 3.0, cz = 2.0;  // bbox center of the 6x4 room
+    size_t floorNear = 0, bottomNear = 0, apronNear = 0, deepTransposed = 0;
     for (const glm::vec3& q : *out.mesh->positions) {
         const double d = std::hypot((double)q.x - cx, (double)q.z - cz);
         if (d < 0.20 && q.y > -0.05f) ++floorNear;  // bore is 0.21
-        if (d < 0.25 && q.y < -0.55f) ++bottomNear;
+        if (d < 0.40 && q.y < -0.5f) ++bottomNear;  // shaft foot + dark bottom
         if (d > 0.30 && d < 0.63 && q.y > -0.02f && q.y < 0.0f) ++apronNear;
+        // The transposed spot (2, 3): only the pit shaft/bottom reach below
+        // -0.5 anywhere, so nothing deep may sit there.
+        if (std::hypot((double)q.x - cz, (double)q.z - cx) < 0.63 && q.y < -0.5f)
+            ++deepTransposed;
     }
     EXPECT_EQ(floorNear, 0u);   // setts/bed knocked out of the bore
-    EXPECT_GT(bottomNear, 0u);  // the shaft's dark bottom
+    EXPECT_GT(bottomNear, 0u);  // the shaft and its dark bottom
     EXPECT_GT(apronNear, 0u);   // the apron ring
+    EXPECT_EQ(deepTransposed, 0u);  // no pit geometry at the swapped (2, 3)
 
     // Baseline without cut_r: the floor stays solid at the spot, the same
     // room blockers register (no duplicates from the re-run), the drain
@@ -918,7 +936,7 @@ TEST(DelveFill, DecorFloorCuts) {
         "{\"tag\": \"drain\", \"align\": \"center\", \"radius\": 0.85}");
     solid.slots["room_fill"] = "rooms/fill_v2.pgg";
     solid.slots["decor:drain"] = "empty_decor.pgg";
-    const delve::FillResult base = fillOneRoom(ir, solid);
+    const delve::FillResult base = fillOneRoom(ir6x4, solid);
     size_t baseNear = 0;
     for (const glm::vec3& q : *base.mesh->positions)
         if (std::hypot((double)q.x - cx, (double)q.z - cz) < 0.20 && q.y > -0.05f)
