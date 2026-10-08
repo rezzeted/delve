@@ -406,6 +406,18 @@ bool load_project(const std::string& path, Project& out, std::string& err) {
                     err = path + ": " + where + ".place: expected floor|wall";
                     return false;
                 }
+                if (rule.place == "wall") {
+                    // align/cut_r steer floor pits only; on a wall rule they
+                    // are dead keys — reject so a typo is not silently lost.
+                    if (r.contains("align")) {
+                        err = path + ": " + where + ".align: floor-only key on a wall rule";
+                        return false;
+                    }
+                    if (r.contains("cut_r")) {
+                        err = path + ": " + where + ".cut_r: floor-only key on a wall rule";
+                        return false;
+                    }
+                }
                 if (!(rule.chance >= 0.0 && rule.chance <= 1.0)) {
                     err = path + ": " + where + ".chance: expected 0..1";
                     return false;

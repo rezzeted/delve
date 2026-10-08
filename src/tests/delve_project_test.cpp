@@ -398,10 +398,10 @@ TEST(ProjectV1, DecorRulesParse) {
     const std::string text =
         surgery(base, "\"side_rules\": [",
                 "\"decor\": [{\"tag\": \"drain\", \"place\": \"floor\", "
-                "\"roles\": [\"hall\", \"crypt\"], \"chance\": 0.6}, "
+                "\"roles\": [\"hall\", \"crypt\"], \"chance\": 0.6, "
+                "\"align\": \"near_door\", \"cut_r\": 0.28}, "
                 "{\"tag\": \"drain\", \"place\": \"wall\", \"count\": 3, "
-                "\"min_dist\": 0.4, \"align\": \"near_door\", \"radius\": 0.35, "
-                "\"cut_r\": 0.28}],\n    "
+                "\"min_dist\": 0.4, \"radius\": 0.35}],\n    "
                 "\"side_rules\": [");
     delve::Project p;
     std::string err;
@@ -411,19 +411,19 @@ TEST(ProjectV1, DecorRulesParse) {
     EXPECT_EQ(p.fill.decor[0].place, "floor");
     EXPECT_EQ(p.fill.decor[0].roles, (std::vector<std::string>{"hall", "crypt"}));
     EXPECT_DOUBLE_EQ(p.fill.decor[0].chance, 0.6);
-    // v2 defaults keep the v1 behavior.
+    // v2 defaults keep the v1 behavior; floor-only keys parse on floor rules.
     EXPECT_EQ(p.fill.decor[0].count, 1);
     EXPECT_DOUBLE_EQ(p.fill.decor[0].min_dist, 0.0);
-    EXPECT_EQ(p.fill.decor[0].align, "any");
+    EXPECT_EQ(p.fill.decor[0].align, "near_door");
     EXPECT_DOUBLE_EQ(p.fill.decor[0].radius, 0.5);
-    EXPECT_DOUBLE_EQ(p.fill.decor[0].cut_r, 0.0);
-    // v2 fields parse.
+    EXPECT_DOUBLE_EQ(p.fill.decor[0].cut_r, 0.28);
+    // v2 fields parse; floor-only keys default on wall rules.
     EXPECT_EQ(p.fill.decor[1].place, "wall");
     EXPECT_EQ(p.fill.decor[1].count, 3);
     EXPECT_DOUBLE_EQ(p.fill.decor[1].min_dist, 0.4);
-    EXPECT_EQ(p.fill.decor[1].align, "near_door");
+    EXPECT_EQ(p.fill.decor[1].align, "any");
     EXPECT_DOUBLE_EQ(p.fill.decor[1].radius, 0.35);
-    EXPECT_DOUBLE_EQ(p.fill.decor[1].cut_r, 0.28);
+    EXPECT_DOUBLE_EQ(p.fill.decor[1].cut_r, 0.0);
     // No decor key at all -> empty rules, defaults intact.
     EXPECT_TRUE(loadFixture().fill.decor.empty());
 }
@@ -445,6 +445,8 @@ TEST(ProjectV1, DecorRulesReject) {
         {"{\"tag\": \"drain\", \"align\": \"diagonal\"}", "align"},
         {"{\"tag\": \"drain\", \"radius\": 0}", "radius"},
         {"{\"tag\": \"drain\", \"cut_r\": -0.1}", "cut_r"},
+        {"{\"tag\": \"drain\", \"place\": \"wall\", \"align\": \"center\"}", "floor-only"},
+        {"{\"tag\": \"drain\", \"place\": \"wall\", \"cut_r\": 0.2}", "floor-only"},
         {"{\"tag\": \"drain\", \"bogus\": 1}", "unknown key"},
     };
     for (const auto& [rule, needle] : probes) {
