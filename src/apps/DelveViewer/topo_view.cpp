@@ -310,7 +310,7 @@ TopoPlanResult drawTopoPlan(const delve::TopoModel& model, Selection& selection,
         }
     }
 
-    // Hover and selection passes: bright, independent of the layer toggles.
+    // Hover follows the rooms layer; the selection pass is always bright.
     if (st.hoverNode >= 0 && st.layers.rooms) {
         const auto& n = model.nodes[st.hoverNode];
         std::vector<ImVec2> pts;
